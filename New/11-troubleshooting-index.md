@@ -7,7 +7,7 @@
 | USB not listed on multiple machines | Bad/incomplete image write | Verify ISO checksum and rewrite USB in raw image mode |
 | Debian graphical installer goes black | Display-mode compatibility | Reboot and select plain text **Install** |
 | “Bad archive mirror” in VM installer | VLAN tag `1` on untagged LAN | Clear Proxmox NIC VLAN field |
-| DNS resolves but HTTPS cannot connect | Missing IPv4 default route | Add/correct `gateway <LAN_GATEWAY_IP>` |
+| DNS resolves but HTTPS cannot connect | Missing IPv4 default route | Add/correct `gateway 192.168.1.254` |
 | Route works until reboot only | Added with `ip route`, not OS config | Fix `/etc/network/interfaces` |
 | Both Proxmox and VM1 vanish | Build A physical network/power fault | Use local console; inspect `dmesg` and NIC |
 | `e1000e ... Hardware Unit Hang` | Intel NIC transmit hardware/driver stall | Disable TSO/GSO/GRO + EEE, cycle link, persist post-up commands |
@@ -51,7 +51,7 @@
 |---|---|---|
 | Compose fails on `/dev/dri/renderD128` | iGPU not passed into VM1 | Remove device mapping/hwaccel or complete passthrough first |
 | Frigate starts but uses high CPU | CPU detector + software decode | Expected current mode; measure before considering GPU passthrough |
-| UI unavailable at old port 5500 | Old mapping removed | Use authenticated `https://<SERVICES_VM_LAN_IP>:8971` |
+| UI unavailable at old port 5500 | Old mapping removed | Use authenticated `https://192.168.1.20:8971` |
 | Config validation rejects `record.retain` | Old retention schema | Use `motion`, `alerts.retain`, and `detections.retain` |
 | Recordings land on VM1 root | iSCSI source missing or wrong bind | Stop container immediately; verify mount and Docker mount source |
 | Container refuses to start when storage is absent | `create_host_path: false` safety behavior | Restore iSCSI mount; do not bypass by creating a local directory |
@@ -89,13 +89,34 @@
 | Symptom | Cause | Resolution |
 |---|---|---|
 | `pihole.example.com` returns HTTP 502 | Caddy cannot reach the Pi-hole backend | With final host-network layout, proxy to `host.docker.internal:8082`; ensure Caddy has `host.docker.internal:host-gateway` |
-| Pi-hole logs show healthy ports 80/443 but direct VM1 IP has no GUI | Bridge-mode Compose published only DNS port 53 | This was expected in the initial design; use Caddy, or final host-network UI at `http://<SERVICES_VM_LAN_IP>:8082/admin/` |
+| Pi-hole logs show healthy ports 80/443 but direct VM1 IP has no GUI | Bridge-mode Compose published only DNS port 53 | This was expected in the initial design; use Caddy, or final host-network UI at `http://192.168.1.20:8082/admin/` |
 | All queries appear from one `172.x` client | Docker bridge source NAT hides original clients | Move Pi-hole to `network_mode: host`; remove `ports` and `edge`; move web listener to `8082` |
 | Pi-hole cannot bind port 53 | Another host resolver/service owns the port | Inspect `sudo ss -lntup | grep -E '(:53[[:space:]])'`; stop or reconfigure the conflicting service before restarting Pi-hole |
 | Internet works but blocking is inconsistent | Public secondary DNS may be selected while Pi-hole is healthy | Expected availability tradeoff; remove public secondary only if strict filtering is more important than DNS failover |
 | VM1 resolves through itself or DNS loops | Pi-hole host accepts tailnet DNS policy | Run `sudo tailscale set --accept-dns=false` on VM1 |
 | DNS uses Pi-hole without an exit node | Tailnet DNS policy is independent of default-route selection | Expected: only DNS traverses VM1; web/download traffic remains direct |
 | Selecting exit node does not change public IP | Exit-node advertisement or admin approval missing | Enable IP forwarding, advertise the exit node, approve it in Tailscale admin, then select `services-vm` on the client |
+
+## Netdata and direct service access
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| Compose says `network_mode` and `networks` are mutually exclusive | Netdata declares host mode and `edge` together | Keep `network_mode: host`; remove `networks`; proxy Caddy to `host.docker.internal:19999` |
+| Proxmox shows VM memory near 100%, but applications are responsive | Linux filesystem cache is counted as used | Check `free -h`; use `available`, swap, and OOM logs rather than the free column |
+| `service.domain.com` works but `TAILSCALE_IP:port` does not | Caddy reaches the container through `edge`, but no host port is published | Add a Compose `ports` mapping or keep domain-only access intentionally |
+| Direct port gives TLS/protocol error | Raw service port is HTTP while Caddy supplies HTTPS for the domain | Use `http://TAILSCALE_IP:port`, unless the application itself provides HTTPS |
+
+## Backrest and removable USB repository
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| Backrest offers to initialize a new repository | Container sees an empty `/repo` or wrong path | Stop; mount USB by UUID; verify `config` + `is_mounted`; recreate Backrest |
+| USB disk changes from `/dev/sdb1` to `/dev/sdc1` | Dynamic enumeration | Use UUID `ea3f8b0d-<SECRET>-e4029de67a34`, never device letters |
+| USB appears on Build A but not VM1 | Proxmox USB passthrough does not match device/port | Verify VM102 USB mapping, enclosure identity, physical port, cable, and power |
+| `e2fsck -n` reports free block/inode count mismatch | Read-only check skipped journal recovery | Unmount fully; run offline `e2fsck -f -p`; inspect exit code |
+| `backup-usb stop` refuses to unmount | Restic child process is active | Wait for plan/check completion; do not force-remove the disk |
+| Unmount says target busy | Shell or process holds the repository | Run `sudo fuser -vm /mnt/backup-seagate`; leave/stop the holder and retry |
+| New snapshot seems likely to duplicate old backups | Snapshot paths/plans changed | Restic deduplicates unchanged content chunks within the existing repository |
 
 ### Reverse-proxy/TLS diagnostic bundle
 

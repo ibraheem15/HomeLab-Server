@@ -1,25 +1,27 @@
 # Home Lab Build Wiki
 
-**Status:** Build B storage, Proxmox, VM1 iSCSI, Frigate, Immich restoration, shared Caddy routing, Pi-hole tailnet DNS, and the optional VM1 exit node are operational.  
-**Last updated:** 2026-08-18  
-**Scope:** Documents the build through Frigate and Immich migration, public `camera.example.com`, private wildcard HTTPS, reusable Docker/Caddy networking, Pi-hole filtering, and Tailscale exit-node routing. VM2/SFTPGo, Jellyfin, Vaultwarden, VM3, and GPU passthrough remain future work.
+**Status:** VM1's platform phase is complete: Build B storage, Proxmox, iSCSI, Frigate, Immich, shared Caddy routing, Pi-hole DNS, optional exit-node routing, monitoring design, and removable Backrest workflow are documented.  
+**Last updated:** 2026-08-19  
+**Scope:** Documents the completed VM1 stage, including split local/iSCSI persistence, public and private ingress, reusable Docker networking, DNS filtering, monitoring, and the normally-off USB backup repository. VM2/SFTPGo, Jellyfin, VM3, and GPU passthrough remain future work.
 
 > **Sanitized public edition:** this is the authoritative current wiki, but it is not a literal export of the live configuration. Descriptive placeholders replace private infrastructure values. See [Placeholder reference](#placeholder-reference) before using any command.
 
 ## Current topology
 
 ```text
-Router / switch <LAN_GATEWAY_IP>
-├── pve-a <PVE_LAN_IP>
-│   ├── Proxmox VE 9.2 on 500 GB NVMe
-│   └── services-vm <SERVICES_VM_LAN_IP>
-│       ├── Debian 13 and Docker
-│       ├── Frigate, Immich, Pi-hole, Caddy, and cloudflared
-│       └── sole iSCSI initiator
-└── storage-b <STORAGE_SERVER_LAN_IP>
-    ├── Debian 13 on 120 GB SSD
-    ├── LIO/targetcli iSCSI target
-    └── existing 1 TB HDD exported to services-vm
+Internet/LAN router 192.168.1.254
+        |
+        +-- pve-a 192.168.1.10
+        |     Proxmox VE 9.2 on 500 GB NVMe
+        |     |
+        |     +-- services-vm 192.168.1.20
+        |           Debian 13, Docker, Frigate, Immich, Pi-hole, Caddy, cloudflared
+        |           iSCSI initiator
+        |
+        +-- storage-b 192.168.1.51
+              Debian 13 on 120 GB SSD
+              LIO/targetcli iSCSI target
+              Existing 1 TB HDD exported to VM1
 ```
 
 All static addresses are configured in the operating systems. No DHCP reservations or port forwarding are required. Tailscale is installed on Build A, Build B, and VM1. Public Frigate access uses an outbound Cloudflare Tunnel; private custom-domain services resolve to VM1's Tailscale address through a DNS-only wildcard.
@@ -46,6 +48,11 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 | [15-immich-migration.md](15-immich-migration.md) | Version-matched restore, local PostgreSQL, preserved iSCSI assets, permission/DNS incidents, and Caddy integration |
 | [16-reusable-docker-edge-network.md](16-reusable-docker-edge-network.md) | Standard frontend/internal network topology and repeatable procedure for adding future services |
 | [17-pihole-tailscale-dns-and-exit-node.md](17-pihole-tailscale-dns-and-exit-node.md) | Tailnet-wide DNS filtering, public fallback resolver, optional exit-node routing, host-network deployment, and incident fixes |
+| [18-netdata-monitoring.md](18-netdata-monitoring.md) | Host-network Netdata deployment, persistence, private Caddy routing, and Linux memory interpretation |
+| [19-backrest-split-storage-backup.md](19-backrest-split-storage-backup.md) | Existing Restic repository, split VM1/iSCSI sources, Immich database rule, exclusions, and deduplication |
+| [20-removable-backup-hdd-runbook.md](20-removable-backup-hdd-runbook.md) | Proxmox USB passthrough, UUID mount policy, automated backup sessions, safe removal, and filesystem recovery |
+| [21-vm1-completion-checkpoint.md](21-vm1-completion-checkpoint.md) | Final VM1 topology, service checkpoint, invariants, direct-port behavior, health checks, and remaining phases |
+| [backup-usb.sh](backup-usb.sh) | Fail-closed helper for detecting, mounting, validating, starting Backrest, stopping, syncing, and unmounting the USB repository |
 
 ## Non-negotiable safety rules
 
@@ -57,6 +64,8 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 6. **Never expose administrative services through an unintended exact DNS record.** Private hostnames must resolve through the DNS-only wildcard to VM1's Tailscale IP; public tunnel CNAMEs are explicit exceptions.
 7. **Attach only web frontends to Docker network `edge`.** Databases and caches stay on application-private networks.
 8. **Treat Pi-hole as the documented host-network exception.** Host networking preserves client IPs; its web UI uses host port `8082` and Caddy reaches it through `host.docker.internal`.
+9. **Mount the removable repository before recreating Backrest.** A container started against the empty mountpoint can mistake it for a new repository.
+10. **Disconnect the backup HDD only after `backup-usb stop` reports `SAFE TO REMOVE`.** An idle UI does not prove Restic has stopped or writes are flushed.
 
 ## Placeholder reference
 
@@ -79,4 +88,7 @@ The public wiki intentionally omits all live identifiers, not only passwords.
 | `<TIMESTAMP>` | Redacted date/time embedded in a backup filename |
 | `<SECRET>` and related names | Value held outside Git in a password manager or protected environment file |
 
-Real domains, Tailscale `100.x` addresses, tunnel UUIDs, hardware serial numbers, product UUIDs, personal usernames, and backup timestamps are also omitted. Generic service-role names remain. Never paste a placeholder literally into a live configuration.
+Real domains, Tailscale `100.x` address
+- Hardware serial numbers and product UUIDs
+
+Replace every value shown as `<SECRET>` or `<PASSWORD>` with the value stored in the password manager.

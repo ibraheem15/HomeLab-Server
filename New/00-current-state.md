@@ -13,7 +13,7 @@
 | Boot disk | 500 GB-class Samsung NVMe, 476.9 GiB usable |
 | Additional disk | 1 TB-class Samsung SATA SSD, 931.5 GiB, NTFS, intentionally untouched |
 | Hypervisor | Proxmox VE 9.2 on Debian 13 base |
-| Address | `<PVE_LAN_IP>/24`; gateway `<LAN_GATEWAY_IP>` |
+| Address | `192.168.1.10/24`; gateway `192.168.1.254` |
 
 Proxmox NVMe layout:
 
@@ -38,7 +38,7 @@ The 1 TB SATA SSD is deferred. It is not necessary to reformat an entire disk wh
 | Boot disk | Lexar 128 GB SSD, 119.2 GiB usable |
 | Data disk | WDC WD10SPZX, 1 TB-class, 931.5 GiB usable |
 | OS | Debian 13 `trixie` |
-| Address | `<STORAGE_SERVER_LAN_IP>/24`; gateway `<LAN_GATEWAY_IP>` |
+| Address | `192.168.1.51/24`; gateway `192.168.1.254` |
 | Function | Storage-only iSCSI target |
 
 The project initially described the HDD as 1.5 TB. Hardware inspection established that the installed disk is actually 1 TB nominal / 931.5 GiB.
@@ -63,8 +63,8 @@ sdb                         931.5G  WDC WD10SPZX
 Stable identifiers:
 
 ```text
-Filesystem UUID: <FILESYSTEM_UUID>
-Partition UUID:  <PARTITION_UUID>
+Filesystem UUID: 675a9a2e-<SECRET>-ff0a0c4ec61e
+Partition UUID:  b08c7158-<SECRET>-f839eab06a67
 ```
 
 The HDD was not wiped. The old Debian directory tree remains visible inside the exported filesystem; application media is referenced within that tree.
@@ -75,7 +75,7 @@ The HDD was not wiped. The old Debian directory tree remains visible inside the 
 |---|---|
 | Proxmox VMID | `102` |
 | OS | Debian 13 |
-| Address | `<SERVICES_VM_LAN_IP>/24`; gateway `<LAN_GATEWAY_IP>` |
+| Address | `192.168.1.20/24`; gateway `192.168.1.254` |
 | CPU | 6 vCPU, CPU type `host` |
 | RAM | 24 GiB, ballooning disabled |
 | Local disk | 100 GiB on `local-lvm` |
@@ -86,7 +86,7 @@ The HDD was not wiped. The old Debian directory tree remains visible inside the 
 VM1 initiator IQN:
 
 ```text
-<INITIATOR_IQN>
+iqn.1993-08.org.debian:01:7feb45<SECRET>ced7d
 ```
 
 VM1 local disk contains Debian, Docker, Compose definitions, configuration, and databases. The iSCSI LUN mounts at `/mnt/storage-b`; `/home/services-vm/storage-b` is a persistent symlink for convenience.
@@ -95,12 +95,12 @@ VM1 local disk contains Debian, Docker, Compose definitions, configuration, and 
 
 | Role | Hostname | Address | Status |
 |---|---|---:|---|
-| Proxmox | `pve-a` | `<PVE_LAN_IP>` | Active |
-| VM1 services | `services-vm` | `<SERVICES_VM_LAN_IP>` | Active |
-| VM2 drive | `drive-vm` | `<DRIVE_VM_LAN_IP>` | Deferred |
-| VM3 owner | `owner-vm` | `<OWNER_VM_LAN_IP>` | Deferred |
-| Build B storage | `storage-b` | `<STORAGE_SERVER_LAN_IP>` | Active; `.51` chosen instead of original `.50` plan |
-| Gateway/router | — | `<LAN_GATEWAY_IP>` | Existing LAN gateway |
+| Proxmox | `pve-a` | `192.168.1.10` | Active |
+| VM1 services | `services-vm` | `192.168.1.20` | Active |
+| VM2 drive | `drive-vm` | `192.168.1.30` | Deferred |
+| VM3 owner | `owner-vm` | `192.168.1.40` | Deferred |
+| Build B storage | `storage-b` | `192.168.1.51` | Active; `.51` chosen instead of original `.50` plan |
+| Gateway/router | — | `192.168.1.254` | Existing LAN gateway |
 
 ## Locked architecture decisions
 
@@ -162,13 +162,25 @@ Pi-hole and Tailscale routing state:
 - VM1 advertises an exit node; clients opt in individually. DNS filtering does not imply full-traffic routing.
 - Tailscale global nameservers are VM1's stable Tailscale IPv4 plus `1.1.1.1`, with Override DNS enabled and MagicDNS retained.
 
+Monitoring and backup state:
+
+- Netdata's documented layout uses host networking on port `19999`; it cannot simultaneously join Docker network `edge`.
+- Caddy reaches host-network services through `host.docker.internal`, backed by the `host-gateway` mapping.
+- Backrest Compose resides at `/home/services-vm/services/backrest`.
+- The existing Restic repository is on a 500 GB-class USB HDD with ext4 UUID `ea3f8b0d-<SECRET>-e4029de67a34`.
+- Proxmox passes the USB device from Build A into VM1; VM1 mounts it manually at `/mnt/backup-seagate`.
+- The repository root contains `config`, `data`, `index`, `keys`, `locks`, `snapshots`, and the `is_mounted` sentinel.
+- Backrest backs up Personal data, Immich local configuration, Immich iSCSI assets/SQL dumps, and active local Vaultwarden data. It excludes Immich's live PostgreSQL directory and the obsolete Build B Vaultwarden duplicate.
+- `/usr/local/sbin/backup-usb` automates detection, mount validation, Backrest recreation, active-Restic refusal, sync, unmount, and safe-removal confirmation.
+- The USB repository remains powered off and unmounted outside manual backup sessions.
+
 ## Deferred work
 
 1. Confirm long-term Intel NIC stability; update Lenovo BIOS and Proxmox kernel during a maintenance window.
 2. Decide whether iGPU passthrough is worth losing the Proxmox host’s local graphics console.
 3. Migrate Vaultwarden and Jellyfin; keep every database local.
-4. Complete post-restore Immich verification and create a fresh database backup.
+4. Complete a full Backrest plan run and test-restore representative Immich, Vaultwarden, and Personal data.
 5. Create VM2 and deploy SFTPGo + Cloudflare Tunnel + Cloudflare Access.
 6. Decide and create VM3 only after ownership/admin boundaries are agreed.
-7. Reconfigure and test Backrest/restic against the final paths and keep scheduled verification enabled.
+7. Periodically run repository checks while the external HDD is attached; plans remain manual because the disk is normally off.
 8. Periodically test Pi-hole failure behavior and confirm clients can resolve through the configured public secondary resolver.
