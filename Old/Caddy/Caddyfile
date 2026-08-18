@@ -1,0 +1,85 @@
+
+# --- Global Snippets ---
+# This snippet handles the SSL magic. 
+# It tells Caddy: "Use my DNS provider to verify I own this domain"
+(common_tls) {
+    tls {
+        # You MUST have the caddy-dns/cloudflare plugin installed for this to work
+        # and the CLOUDFLARE_API_TOKEN environment variable set.
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+}
+
+# --- Service Blocks ---
+
+# 1. Aria2 (Download Manager)
+aria.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:6880
+    reverse_proxy /jsonrpc <tailscale-ip>:6800
+}
+
+# 2. Pi-hole (DNS Blocker)
+pihole.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:5000
+}
+
+# 3. Portainer (Docker Manager)
+portainer.example.com {
+    import common_tls
+    reverse_proxy https://<tailscale-ip>:9443 {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
+}
+
+# 4. Jellyfin (Media)
+jellyfin.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:8096
+}
+
+# 5. Nextcloud (Files)
+nextcloud.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:5080
+    
+    # Nextcloud often needs to know it's being proxied to handle redirects correctly
+    header Strict-Transport-Security max-age=31536000;
+}
+
+# 6. Immich (Photos)
+immich.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:2283
+}
+
+# 7. Homepage (Dashboard)
+home.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:3000
+}
+
+# 8. Netdata (Monitoring)
+netdata.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:19999
+}
+
+# 9. Torrent (qBittorrent/Transmission?)
+torrent.example.com {
+    import common_tls
+    reverse_proxy <tailscale-ip>:5072
+}
+
+# 10. Generic legacy server
+server.example.com {
+    import common_tls
+    reverse_proxy https://<tailscale-ip>:3001 {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
+}

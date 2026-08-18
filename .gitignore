@@ -1,0 +1,43 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+
+# Private keys, certificates, and password databases
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.kdbx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Runtime state, databases, dumps, and backups
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sql
+*.sql.gz
+*.dump
+*.bak
+*.backup
+*.log
+backups/
+saveconfig.json
+saveconfig.*.json
+tailscaled.state
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*~
+*.swp
+
