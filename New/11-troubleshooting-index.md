@@ -20,6 +20,23 @@
 | Template “uses RAM” | Misunderstanding | Template consumes disk only while stopped; no running CPU/RAM |
 | Need another VM disk | Free storage required, not full-disk format | Allocate from existing free thin-pool/VG or intentionally add another pool |
 | qemu guest agent/SSH shows AF_VSOCK warning | Optional systemd SSH vsock generator | Ignore if normal TCP SSH and guest agent work |
+| TrueNAS installer console is unreadable/corrupted | Virtual framebuffer compatibility | Use SPICE display for installation; storage is unaffected |
+| TrueNAS pool creation says duplicate serial `None` | Both emulated SCSI disks lack unique serials | Stop VM; add distinct `serial=` values to `scsi0` and `scsi1`; restart |
+
+## TrueNAS, SMB, and VM2
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| TrueNAS shows only one NIC | `net1` was absent or added without a full power cycle | Add VirtIO `net1` on `vmbr1`; fully stop/start VM `101` |
+| VM2 shows only `ens18` | Storage NIC was not attached | Add VirtIO `net1` on `vmbr1`; fully stop/start VM `103` |
+| VM2 has both `.30` and DHCP `.116` | Per-interface `dhcpcd@ens18` still owns a lease | Disable/mask the template unit or reboot after persistent static configuration; verify no `proto dhcp` route |
+| Static IP works but DNS fails | `dhcpcd` previously generated `/etc/resolv.conf` | Add persistent nameservers to `/etc/resolv.conf`; retain `dns-nameservers` in interfaces file |
+| CIFS mount works manually but not after boot | No persistent `_netdev`/systemd automount entry | Add the documented `/etc/fstab` line; daemon-reload; reboot-test |
+| CIFS write returns permission denied | TrueNAS ACL, SMB credential, or UID/GID mapping mismatch | Verify `vm2_business` owner/group, restricted ACL, root-only credential file, and client UID/GID 1000 |
+| TrueNAS quota blocks writes unexpectedly | Dataset reached its current adjustable limit | Increase quota if pool capacity permits; do not add a reservation |
+| SFTPGo SQLite says `unable to open database file` | Container UID 1000 cannot write local `state` directory | `chown -R 1000:1000 state`; mode 750; recreate container |
+| Tunnel shows `Unknown private service` | Route created as private hostname or published route not yet propagated | Use Published application route to `http://sftpgo:8080`; wait for Cloudflare propagation |
+| Tunnel returns 502 | Connector cannot resolve/reach origin | Confirm both containers share `sftpgo_default`; test `http://sftpgo:8080/web/client` from that network |
 
 ## iSCSI
 

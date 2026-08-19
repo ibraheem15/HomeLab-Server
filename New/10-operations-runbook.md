@@ -7,7 +7,7 @@
 ```bash
 ip -4 -br address
 ip route
-ping -c 3 <LAN_GATEWAY_IP>
+ping -c 3 192.168.1.254
 qm status 102
 lvs
 systemctl --failed
@@ -39,14 +39,34 @@ docker ps
 cd /home/services-vm/frigate && docker compose ps
 ```
 
+### TrueNAS and VM2
+
+```bash
+# Proxmox
+qm status 101
+qm status 103
+
+# VM2
+ip -4 -br address
+ip route
+ping -c 3 10.20.0.10
+findmnt /mnt/vm2-business
+df -hT /mnt/vm2-business
+cd /home/baadesaba/services/sftpgo
+sudo docker compose ps
+sudo docker compose logs --tail=30 cloudflared
+```
+
 ## Safe startup order
 
 1. Router/switch available.
 2. Build B boots; target restore service loads LIO configuration.
-3. Confirm Build B listens on `<STORAGE_SERVER_LAN_IP>:3260`.
+3. Confirm Build B listens on `192.168.1.51:3260`.
 4. Build A boots.
-5. VM1 boots; open-iscsi logs in automatically and systemd mounts the UUID.
-6. Docker starts Frigate only when its required source path exists.
+5. TrueNAS VM `101` starts and imports pool `sata`.
+6. VM1 `102` boots; open-iscsi logs in automatically and systemd mounts the UUID.
+7. VM2 `103` boots; its CIFS automount connects on first access.
+8. VM3 `104` starts only after its configuration is completed.
 
 After an uncontrolled outage, do not assume the mount is healthy merely because it exists. Run the VM1 health check and scan kernel logs.
 
@@ -155,6 +175,18 @@ lvs
 vgs
 df -hT /
 ```
+
+### TrueNAS/VM2
+
+Check the TrueNAS dashboard for pool `sata` status, dataset usage, alerts, and SMART state. Inside VM2:
+
+```bash
+df -hT /mnt/vm2-business
+sudo docker system df
+du -sh /home/baadesaba/services/sftpgo/state
+```
+
+Do not fill ZFS beyond roughly 80–90%. Quotas can exceed physical capacity because they are limits, not reservations; monitor actual pool use.
 
 ### VM1 and iSCSI media
 

@@ -11,7 +11,7 @@
 | RAM | 48 GB |
 | GPU | Intel UHD Graphics 630 at PCI `00:02.0`, not passed through |
 | Boot disk | 500 GB-class Samsung NVMe, 476.9 GiB usable |
-| Additional disk | 1 TB-class Samsung SATA SSD, 931.5 GiB, NTFS, intentionally untouched |
+| Additional disk | Samsung 870 EVO 1 TB SATA SSD, 931.5 GiB, passed through to TrueNAS VM `101` |
 | Hypervisor | Proxmox VE 9.2 on Debian 13 base |
 | Address | `192.168.1.10/24`; gateway `192.168.1.254` |
 
@@ -27,7 +27,7 @@ nvme0n1                         476.9G
   └─VG free                      50.0G
 ```
 
-The 1 TB SATA SSD is deferred. It is not necessary to reformat an entire disk when adding future VMs: Proxmox allocates virtual disks from free space in a storage pool. Existing partitions only need to be changed when deliberately converting that physical disk into Proxmox storage.
+The former NTFS partition was intentionally erased after explicit confirmation. The entire SATA SSD is now a single-disk ZFS pool named `sata`, owned exclusively by TrueNAS. Proxmox must not mount it or add it as ordinary Proxmox storage. SMART passed, but the SSD reported 34 reallocated sectors; it requires monitoring and is not a substitute for backup.
 
 ### Build B — `storage-b`
 
@@ -91,14 +91,66 @@ iqn.1993-08.org.debian:01:7feb45<SECRET>ced7d
 
 VM1 local disk contains Debian, Docker, Compose definitions, configuration, and databases. The iSCSI LUN mounts at `/mnt/storage-b`; `/home/services-vm/storage-b` is a persistent symlink for convenience.
 
+### TrueNAS — VM `101`
+
+| Setting | Current value |
+|---|---|
+| OS | TrueNAS Community Edition 25.10.6 |
+| VMID | `101` |
+| Management | `192.168.1.25/24` on `vmbr0` |
+| Storage network | `10.20.0.10/24` on `vmbr1`; no gateway |
+| CPU/RAM | 2 host-type vCPU / 8 GiB fixed RAM |
+| Boot disk | 32 GiB local NVMe virtual disk |
+| Data disk | Whole Samsung 870 EVO 1 TB SATA SSD via stable by-id path |
+| Pool | `sata`, single-disk ZFS stripe, no encryption/redundancy |
+
+Datasets:
+
+```text
+sata
+├── vm2-business   quota 100 GiB, no reservation
+└── vm3-extra     quota 500 GiB, no reservation
+```
+
+Quotas are adjustable limits, not preallocated partitions. They can be increased online; actual combined usage must still fit the physical pool. Keep 10–20% free.
+
+### VM2 — `baadesaba`
+
+| Setting | Current value |
+|---|---|
+| VMID | `103` |
+| OS | Debian 13 |
+| LAN | `192.168.1.30/24`, gateway `192.168.1.254` |
+| Storage NIC | `10.20.0.20/24`, no gateway |
+| CPU/RAM | 4 host-type vCPU / 4 GiB ballooned to 2 GiB minimum |
+| Local disk | 20 GiB on `local-lvm` |
+| Shared data | `//10.20.0.10/vm2-business` at `/mnt/vm2-business` |
+| Services | Docker, Tailscale, SFTPGo, dedicated `cloudflared` connector |
+
+SFTPGo state/SQLite/host keys stay under `/home/baadesaba/services/sftpgo/state` on local NVMe. Uploaded files live under `/mnt/vm2-business/baadesaba` on TrueNAS.
+
+### VM3
+
+| Setting | Current value |
+|---|---|
+| VMID | `104` |
+| OS | Debian 13 installed |
+| CPU/RAM | 4 host-type vCPU / 4 GiB ballooned to 2 GiB minimum |
+| Local disk | 30 GiB on `local-lvm` |
+| Target LAN | `192.168.1.40/24` |
+| Target storage NIC | `10.20.0.30/24` |
+| Target share | `//10.20.0.10/vm3-extra` |
+| Status | Networking, SMB mount, Tailscale organization, and workload configuration pending |
+
 ## Address plan
 
 | Role | Hostname | Address | Status |
 |---|---|---:|---|
 | Proxmox | `pve-a` | `192.168.1.10` | Active |
 | VM1 services | `services-vm` | `192.168.1.20` | Active |
-| VM2 drive | `drive-vm` | `192.168.1.30` | Deferred |
-| VM3 owner | `owner-vm` | `192.168.1.40` | Deferred |
+| TrueNAS management | `truenas` | `192.168.1.25` | Active |
+| VM2 drive | `baadesaba` | `192.168.1.30` | Active |
+| VM3 | user-selected | `192.168.1.40` | Debian installed; network pending |
 | Build B storage | `storage-b` | `192.168.1.51` | Active; `.51` chosen instead of original `.50` plan |
 | Gateway/router | — | `192.168.1.254` | Existing LAN gateway |
 
@@ -116,7 +168,10 @@ VM1 local disk contains Debian, Docker, Compose definitions, configuration, and 
 - **Public and private DNS are intentionally different.** Exact proxied tunnel CNAMEs are public; the DNS-only wildcard resolves undefined subdomains to VM1's Tailscale IP.
 - **Tailnet DNS and exit-node routing are independent.** Connected clients use Pi-hole DNS even without selecting an exit node; ordinary internet traffic traverses VM1 only when `services-vm` is explicitly selected as the exit node.
 - **DNS availability is preferred over strict enforcement.** Tailscale advertises VM1 Pi-hole plus public resolver `1.1.1.1`; clients may use either because resolver lists are not guaranteed primary/fallback ordering.
-- **VM3 remains deferred.** Its owner will use a separate Tailscale organization. Host-owner console access policy remains undecided.
+- **TrueNAS owns the whole SATA SSD.** VM2 and VM3 consume SMB datasets through private bridge `vmbr1`; Proxmox does not mount the ZFS disk.
+- **Dataset quotas replace fixed partitions.** `vm2-business` starts at 100 GiB and `vm3-extra` at 500 GiB; both remain expandable without reformatting.
+- **Build B HDD remains the VM1 media tier.** Immich media and Frigate recordings stay on HDD/iSCSI; PostgreSQL stays on VM1 NVMe.
+- **VM3 is installed but not operational.** It will eventually join a separate Tailscale organization; host-owner console policy remains undecided.
 
 ## Current service state
 
@@ -174,13 +229,21 @@ Monitoring and backup state:
 - `/usr/local/sbin/backup-usb` automates detection, mount validation, Backrest recreation, active-Restic refusal, sync, unmount, and safe-removal confirmation.
 - The USB repository remains powered off and unmounted outside manual backup sessions.
 
+VM2/SFTPGo state:
+
+- TrueNAS SMB account `vm2_business` owns `sata/vm2-business`; its Unix home remains `/var/empty` because SMB access is ACL-based.
+- VM2 mounts the share using a root-only credentials file and systemd CIFS automount.
+- SFTPGo runs as UID/GID 1000, matching the CIFS client mapping.
+- `cloudflared` runs beside SFTPGo on Compose network `sftpgo_default` and routes the public drive hostname to `http://sftpgo:8080`.
+- Cloudflare Access was intentionally skipped. SFTPGo credentials are the current public protection layer; 2FA and brute-force hardening remain deferred.
+
 ## Deferred work
 
 1. Confirm long-term Intel NIC stability; update Lenovo BIOS and Proxmox kernel during a maintenance window.
 2. Decide whether iGPU passthrough is worth losing the Proxmox host’s local graphics console.
 3. Migrate Vaultwarden and Jellyfin; keep every database local.
 4. Complete a full Backrest plan run and test-restore representative Immich, Vaultwarden, and Personal data.
-5. Create VM2 and deploy SFTPGo + Cloudflare Tunnel + Cloudflare Access.
-6. Decide and create VM3 only after ownership/admin boundaries are agreed.
+5. Enable SFTPGo admin/user 2FA and review brute-force/rate-limit settings before broader account distribution.
+6. Configure VM3 static LAN/storage networking, persistent SMB mount, guest agent, and its separate Tailscale organization.
 7. Periodically run repository checks while the external HDD is attached; plans remain manual because the disk is normally off.
 8. Periodically test Pi-hole failure behavior and confirm clients can resolve through the configured public secondary resolver.

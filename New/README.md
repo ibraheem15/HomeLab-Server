@@ -1,8 +1,8 @@
 # Home Lab Build Wiki
 
-**Status:** VM1's platform phase is complete: Build B storage, Proxmox, iSCSI, Frigate, Immich, shared Caddy routing, Pi-hole DNS, optional exit-node routing, monitoring design, and removable Backrest workflow are documented.  
+**Status:** VM1 is complete for now. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are now operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.  
 **Last updated:** 2026-08-19  
-**Scope:** Documents the completed VM1 stage, including split local/iSCSI persistence, public and private ingress, reusable Docker networking, DNS filtering, monitoring, and the normally-off USB backup repository. VM2/SFTPGo, Jellyfin, VM3, and GPU passthrough remain future work.
+**Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, and current VM3 checkpoint. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
 
 > **Sanitized public edition:** this is the authoritative current wiki, but it is not a literal export of the live configuration. Descriptive placeholders replace private infrastructure values. See [Placeholder reference](#placeholder-reference) before using any command.
 
@@ -14,9 +14,19 @@ Internet/LAN router 192.168.1.254
         +-- pve-a 192.168.1.10
         |     Proxmox VE 9.2 on 500 GB NVMe
         |     |
+        |     +-- truenas 192.168.1.25 / 10.20.0.10
+        |     |     1 TB SATA SSD -> ZFS pool sata
+        |     |     SMB datasets vm2-business + vm3-extra
+        |     |
         |     +-- services-vm 192.168.1.20
         |           Debian 13, Docker, Frigate, Immich, Pi-hole, Caddy, cloudflared
         |           iSCSI initiator
+        |     |
+        |     +-- VM2 baadesaba 192.168.1.30 / 10.20.0.20
+        |     |     SFTPGo + dedicated cloudflared connector
+        |     |
+        |     +-- VM3 192.168.1.40 / 10.20.0.30 planned
+        |           Debian installed; configuration pending
         |
         +-- storage-b 192.168.1.51
               Debian 13 on 120 GB SSD
@@ -52,6 +62,12 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 | [19-backrest-split-storage-backup.md](19-backrest-split-storage-backup.md) | Existing Restic repository, split VM1/iSCSI sources, Immich database rule, exclusions, and deduplication |
 | [20-removable-backup-hdd-runbook.md](20-removable-backup-hdd-runbook.md) | Proxmox USB passthrough, UUID mount policy, automated backup sessions, safe removal, and filesystem recovery |
 | [21-vm1-completion-checkpoint.md](21-vm1-completion-checkpoint.md) | Final VM1 topology, service checkpoint, invariants, direct-port behavior, health checks, and remaining phases |
+| [22-build-a-storage-architecture.md](22-build-a-storage-architecture.md) | Final NVMe/SATA/HDD roles, TrueNAS rationale, private storage bridge, and capacity model |
+| [23-truenas-vm-and-zfs-pool.md](23-truenas-vm-and-zfs-pool.md) | TrueNAS VM creation, raw SSD attachment, installer/display issues, serial fix, networking, and ZFS pool creation |
+| [24-truenas-datasets-acls-and-smb.md](24-truenas-datasets-acls-and-smb.md) | Dataset quotas, SMB identities, ACL isolation, Linux SMB rationale, and share definitions |
+| [25-vm2-network-and-storage.md](25-vm2-network-and-storage.md) | VM2 build, dual-NIC static networking, DHCP/DNS incidents, persistent SMB mount, Tailscale, and Docker baseline |
+| [26-sftpgo-and-cloudflare-tunnel.md](26-sftpgo-and-cloudflare-tunnel.md) | SFTPGo split persistence, UID fix, initial user, dedicated tunnel, published route, and deferred hardening |
+| [27-vm3-installation-checkpoint.md](27-vm3-installation-checkpoint.md) | VM3 resources, installed state, target network/storage configuration, and unfinished work |
 | [backup-usb.sh](backup-usb.sh) | Fail-closed helper for detecting, mounting, validating, starting Backrest, stopping, syncing, and unmounting the USB repository |
 
 ## Non-negotiable safety rules
@@ -66,6 +82,23 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 8. **Treat Pi-hole as the documented host-network exception.** Host networking preserves client IPs; its web UI uses host port `8082` and Caddy reaches it through `host.docker.internal`.
 9. **Mount the removable repository before recreating Backrest.** A container started against the empty mountpoint can mistake it for a new repository.
 10. **Disconnect the backup HDD only after `backup-usb stop` reports `SAFE TO REMOVE`.** An idle UI does not prove Restic has stopped or writes are flushed.
+11. **Do not mount or format the 1 TB SATA SSD on Proxmox.** TrueNAS VM `101` owns the whole physical disk and ZFS pool `sata`.
+12. **Do not share the root of pool `sata`.** Export only child datasets with isolated ACLs.
+13. **Keep VM2/VM3 application databases on their local NVMe disks.** SMB is for bulk files, not databases.
+14. **Never start file services against an unmounted SMB path.** Confirm `findmnt` before Docker recreation; systemd automount is the normal guard.
+
+## Secrets intentionally omitted
+
+The wiki includes real LAN addresses, target IQN, filesystem UUID, and partition UUID because they are required for reconstruction. It excludes:
+
+- iSCSI CHAP password
+- Camera and ONVIF passwords
+- Tailscale authentication material
+- Cloudflare credentials
+- Cloudflare tunnel UUID where not required for reconstruction
+- VM1 Tailscale `100.x` address
+- Hardware serial numbers and product UUIDs
+
 
 ## Placeholder reference
 
@@ -87,8 +120,5 @@ The public wiki intentionally omits all live identifiers, not only passwords.
 | `<IANA_TIMEZONE>` | Deployment timezone, for example `Etc/UTC` |
 | `<TIMESTAMP>` | Redacted date/time embedded in a backup filename |
 | `<SECRET>` and related names | Value held outside Git in a password manager or protected environment file |
-
-Real domains, Tailscale `100.x` address
-- Hardware serial numbers and product UUIDs
 
 Replace every value shown as `<SECRET>` or `<PASSWORD>` with the value stored in the password manager.
