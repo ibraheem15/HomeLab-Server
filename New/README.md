@@ -1,8 +1,10 @@
 # Home Lab Build Wiki
 
-**Status:** VM1 is complete for now. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are now operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.  
-**Last updated:** 2026-08-19  
-**Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, and current VM3 checkpoint. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
+**Status:** VM1 is complete for now. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are now operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.
+
+**Last updated:** 2026-08-20
+
+**Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, Build B outage recovery, and the current VM3 checkpoint. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
 
 > **Sanitized public edition:** this is the authoritative current wiki, but it is not a literal export of the live configuration. Descriptive placeholders replace private infrastructure values. See [Placeholder reference](#placeholder-reference) before using any command.
 
@@ -68,6 +70,7 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 | [25-vm2-network-and-storage.md](25-vm2-network-and-storage.md) | VM2 build, dual-NIC static networking, DHCP/DNS incidents, persistent SMB mount, Tailscale, and Docker baseline |
 | [26-sftpgo-and-cloudflare-tunnel.md](26-sftpgo-and-cloudflare-tunnel.md) | SFTPGo split persistence, UID fix, initial user, dedicated tunnel, published route, and deferred hardening |
 | [27-vm3-installation-checkpoint.md](27-vm3-installation-checkpoint.md) | VM3 resources, installed state, target network/storage configuration, and unfinished work |
+| [28-build-b-outage-recovery.md](28-build-b-outage-recovery.md) | Build B outage recovery while VM1 remains running, stale-mount escalation, and UPS shutdown order |
 | [backup-usb.sh](backup-usb.sh) | Fail-closed helper for detecting, mounting, validating, starting Backrest, stopping, syncing, and unmounting the USB repository |
 
 ## Non-negotiable safety rules
