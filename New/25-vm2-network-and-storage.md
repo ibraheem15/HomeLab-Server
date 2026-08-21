@@ -26,7 +26,13 @@ qm config 103 | grep '^net'
 qm start 103
 ```
 
-After a full start, `ens19` appeared.
+After a full start, verify inside VM2 that `ens19` appeared:
+
+```bash
+ip link show ens19
+```
+
+The command should display the `ens19` interface. If it returns `Device "ens19" does not exist`, confirm `net1` in the Proxmox configuration and fully power-cycle the VM again.
 
 ## Persistent network configuration
 
@@ -67,7 +73,14 @@ sudo systemctl disable --now dhcpcd@ens18.service
 sudo systemctl mask dhcpcd@ens18.service
 ```
 
-Verify that only `.30` remains and no route says `proto dhcp`.
+Verify that only `.30` remains and no route says `proto dhcp`:
+
+```bash
+ip -4 -brief address show dev ens18
+ip -4 route show
+```
+
+The address output should list only `192.168.1.30/24` for `ens18`, and the route output should contain no `proto dhcp` entries.
 
 ### DNS loss
 

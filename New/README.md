@@ -1,12 +1,8 @@
 # Home Lab Build Wiki
 
-**Status:** VM1 is complete for now. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are now operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.
-
-**Last updated:** 2026-08-20
-
-**Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, Build B outage recovery, and the current VM3 checkpoint. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
-
-> **Sanitized public edition:** this is the authoritative current wiki, but it is not a literal export of the live configuration. Descriptive placeholders replace private infrastructure values. See [Placeholder reference](#placeholder-reference) before using any command.
+**Status:** VM1 is complete for now. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are now operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.  
+**Last updated:** 2026-08-21  
+**Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, current VM3 checkpoint, and a deferred iSCSI-to-NFS migration runbook. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
 
 ## Current topology
 
@@ -18,7 +14,7 @@ Internet/LAN router 192.168.1.254
         |     |
         |     +-- truenas 192.168.1.25 / 10.20.0.10
         |     |     1 TB SATA SSD -> ZFS pool sata
-        |     |     SMB datasets vm2-business + vm3-extra
+        |     |     SMB datasets vm2-business + vm3-faisal
         |     |
         |     +-- services-vm 192.168.1.20
         |           Debian 13, Docker, Frigate, Immich, Pi-hole, Caddy, cloudflared
@@ -70,7 +66,7 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 | [25-vm2-network-and-storage.md](25-vm2-network-and-storage.md) | VM2 build, dual-NIC static networking, DHCP/DNS incidents, persistent SMB mount, Tailscale, and Docker baseline |
 | [26-sftpgo-and-cloudflare-tunnel.md](26-sftpgo-and-cloudflare-tunnel.md) | SFTPGo split persistence, UID fix, initial user, dedicated tunnel, published route, and deferred hardening |
 | [27-vm3-installation-checkpoint.md](27-vm3-installation-checkpoint.md) | VM3 resources, installed state, target network/storage configuration, and unfinished work |
-| [28-build-b-outage-recovery.md](28-build-b-outage-recovery.md) | Build B outage recovery while VM1 remains running, stale-mount escalation, and UPS shutdown order |
+| [28-future-iscsi-to-nfs-migration.md](28-future-iscsi-to-nfs-migration.md) | Deferred, reversible conversion of Build B from an iSCSI block export to a locally mounted ext4 filesystem exported directly to VM1 through NFSv4 |
 | [backup-usb.sh](backup-usb.sh) | Fail-closed helper for detecting, mounting, validating, starting Backrest, stopping, syncing, and unmounting the USB repository |
 
 ## Non-negotiable safety rules
@@ -101,27 +97,5 @@ The wiki includes real LAN addresses, target IQN, filesystem UUID, and partition
 - Cloudflare tunnel UUID where not required for reconstruction
 - VM1 Tailscale `100.x` address
 - Hardware serial numbers and product UUIDs
-
-
-## Placeholder reference
-
-The public wiki intentionally omits all live identifiers, not only passwords.
-
-| Placeholder | Meaning |
-|---|---|
-| `<LAN_CIDR>` / `<LAN_GATEWAY_IP>` | Private LAN and router address |
-| `<PVE_LAN_IP>` | Proxmox host address |
-| `<SERVICES_VM_LAN_IP>` | Docker services VM address |
-| `<STORAGE_SERVER_LAN_IP>` | iSCSI target address |
-| `<DRIVE_VM_LAN_IP>` / `<OWNER_VM_LAN_IP>` | Reserved future guest addresses |
-| `<CAMERA_1_LAN_IP>` / `<CAMERA_2_LAN_IP>` | Camera addresses |
-| `<SERVICES_VM_TAILSCALE_IP>` | Services VM address inside the tailnet |
-| `<FILESYSTEM_UUID>` / `<PARTITION_UUID>` | Stable identifiers for the exported filesystem |
-| `<INITIATOR_IQN>` / `<TARGET_IQN>` | iSCSI identities |
-| `<CHAP_USERNAME>` | Non-secret iSCSI login name, omitted to avoid publishing a complete login profile |
-| `<LEGACY_USER>` | Username retained in paths on the migrated filesystem |
-| `<IANA_TIMEZONE>` | Deployment timezone, for example `Etc/UTC` |
-| `<TIMESTAMP>` | Redacted date/time embedded in a backup filename |
-| `<SECRET>` and related names | Value held outside Git in a password manager or protected environment file |
 
 Replace every value shown as `<SECRET>` or `<PASSWORD>` with the value stored in the password manager.
