@@ -14,7 +14,7 @@ Rejected:  Browser certificate warnings
 
 Cloudflare Tunnel is unsuitable for this specific boundary because it makes the hostname reachable from Cloudflare's public edge. Cloudflare Access adds authentication but does not make Tailscale connectivity mandatory.
 
-Tailscale Serve is private and automatically handles HTTPS, but it only serves the tailnet's `*.ts.net` names. It cannot provide `portainer.example.com`.
+Tailscale Serve's HTTPS termination is limited to the tailnet's `*.ts.net` names, so it cannot itself issue a certificate for `portainer.example.com`. The selected design instead uses Serve as a raw TCP forwarder; Caddy receives the original TLS stream and supplies the custom-domain wildcard certificate.
 
 ## Final architecture
 
@@ -23,7 +23,9 @@ Tailscale-connected client
   -> public DNS lookup
   -> portainer.example.com = VM1's stable 100.x address
   -> encrypted Tailscale path
-  -> Caddy bound to 100.x:443
+  -> Tailscale Serve raw TCP :443
+  -> 127.0.0.1:8443
+  -> Caddy container port 443
   -> Portainer container on edge network
 ```
 
@@ -86,7 +88,7 @@ Alternatives rejected:
 
 | Option | Why not selected |
 |---|---|
-| Tailscale Serve | Trusted HTTPS, but only `*.ts.net`; custom domain unavailable |
+| Tailscale Serve HTTPS termination | Trusted HTTPS, but only `*.ts.net`; selected raw TCP mode leaves custom-domain TLS termination to Caddy |
 | Cloudflare Tunnel + Access | Public edge remains reachable without Tailscale |
 | Caddy `tls internal` | Requires installing Caddy's private CA on every client |
 | Plain HTTP over Tailscale | WireGuard encrypts transport, but the browser lacks HTTPS identity and secure-origin behavior |
@@ -98,7 +100,7 @@ Alternatives rejected:
 | Service class | DNS | Network path | Reverse proxy |
 |---|---|---|---|
 | Public application | Exact proxied CNAME created by tunnel route | Cloudflare Tunnel | Caddy port 80 |
-| Private admin application | Wildcard DNS-only A to `100.x` | Tailscale | Caddy port 443 |
+| Private admin application | Wildcard DNS-only A to `100.x` | Tailscale Serve raw TCP `:443` -> loopback `:8443` | Caddy port 443 |
 | LAN-only infrastructure | No public DNS required | LAN | Direct or separately restricted |
 
 Examples:
@@ -129,5 +131,7 @@ For a new public service:
 - A DNS-only wildcard reveals VM1's `100.x` address publicly, but that address is not Internet-routable.
 - The wildcard causes misspelled/undefined subdomains to resolve to VM1. Caddy's default handler must return `404` rather than exposing a default backend.
 - Tailscale ACLs remain the authorization layer controlling which tailnet users/devices may reach VM1.
+- Caddy's host publication is loopback-only (`127.0.0.1:8443`); do not change it to `0.0.0.0` as a shortcut.
+- Use `tailscale serve`, never `tailscale funnel`, for this private path.
 - A wildcard certificate protects transport and hostname identity; it does not authorize users.
 - Keep application authentication enabled, especially for Portainer and Vaultwarden.

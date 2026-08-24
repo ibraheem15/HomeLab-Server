@@ -14,7 +14,7 @@ networks:
   - edge
 ```
 
-These modes are mutually exclusive. Netdata uses `network_mode: host` for complete host visibility. It therefore does **not** join `edge`; Caddy reaches it through `host.docker.internal:19999`, using the same host-gateway pattern as Pi-hole.
+These modes are mutually exclusive. Netdata uses `network_mode: host` for complete host visibility. It therefore does **not** join `edge`; Caddy reaches it through `host.docker.internal:19999`, using the same host-gateway pattern as AdGuard Home.
 
 ## Deployment layout
 

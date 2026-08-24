@@ -166,8 +166,8 @@ SFTPGo state/SQLite/host keys stay under `/home/baadesaba/services/sftpgo/state`
 - **One Cloudflare Tunnel serves public VM1 applications.** The active tunnel is `services-vm`; application names such as `camera.example.com` are routes, not separate tunnels.
 - **Caddy is the shared reverse proxy.** `cloudflared` reaches Caddy on private Docker network `edge`; future web frontends join `edge`, while databases remain isolated.
 - **Public and private DNS are intentionally different.** Exact proxied tunnel CNAMEs are public; the DNS-only wildcard resolves undefined subdomains to VM1's Tailscale IP.
-- **Tailnet DNS and exit-node routing are independent.** Connected clients use Pi-hole DNS even without selecting an exit node; ordinary internet traffic traverses VM1 only when `services-vm` is explicitly selected as the exit node.
-- **DNS availability is preferred over strict enforcement.** Tailscale advertises VM1 Pi-hole plus public resolver `1.1.1.1`; clients may use either because resolver lists are not guaranteed primary/fallback ordering.
+- **Tailnet DNS and exit-node routing are independent.** Connected clients use AdGuard Home DNS even without selecting an exit node; ordinary internet traffic traverses VM1 only when `services-vm` is explicitly selected as the exit node.
+- **DNS availability is preferred over strict enforcement.** Tailscale advertises VM1 AdGuard Home plus public resolver `1.1.1.1`; clients may use either because resolver lists are not guaranteed primary/fallback ordering.
 - **TrueNAS owns the whole SATA SSD.** VM2 and VM3 consume SMB datasets through private bridge `vmbr1`; Proxmox does not mount the ZFS disk.
 - **Dataset quotas replace fixed partitions.** `vm2-business` starts at 100 GiB and `vm3-extra` at 500 GiB; both remain expandable without reformatting.
 - **Build B HDD remains the VM1 media tier.** Immich media and Frigate recordings stay on HDD/iSCSI; PostgreSQL stays on VM1 NVMe.
@@ -205,14 +205,20 @@ Reverse-proxy state:
 - DNS-only wildcard `*` points at VM1's Tailscale IPv4 for future private services.
 - Portainer joins `default`/`portainer_network` plus `edge`.
 - Caddy wildcard DNS-01 support uses official Caddy images plus `caddy-dns/cloudflare` source.
+- Caddy publishes container TLS only to host loopback `127.0.0.1:8443`; it no longer binds Docker directly to the Tailscale `100.x` address.
+- Persistent Tailscale Serve raw TCP forwarding owns tailnet port `443` and forwards to `127.0.0.1:8443`, preserving Caddy TLS termination while removing the Tailscale-address boot race.
+- The new private HTTPS path was verified working on 2026-08-25. Full VM reboot persistence remains pending an approved maintenance window.
 - Future private web frontends use the same DNS wildcard and certificate; only their Caddy matcher and `edge` membership change.
 
-Pi-hole and Tailscale routing state:
+AdGuard Home and Tailscale routing state:
 
-- Pi-hole runs in `/home/services-vm/services/pihole` with persistent configuration at `./etc-pihole`.
-- DNS listens directly on VM1 TCP/UDP port `53`; Pi-hole uses `network_mode: host` so query logs retain individual Tailscale client `100.x` addresses.
-- Pi-hole's HTTP interface listens on host port `8082`; Caddy proxies `pihole.example.com` to `host.docker.internal:8082`.
-- Pi-hole does not join `edge`; Caddy's Compose definition maps `host.docker.internal` using `host-gateway`.
+- AdGuard Home runs in `/home/services-vm/services/adguardhome`; `./conf` and `./work` persist on VM1's local NVMe-backed disk.
+- AdGuard Home uses `network_mode: host`, owns VM1 TCP/UDP port `53`, and retains individual LAN/Tailscale client addresses instead of a Docker `172.x` gateway.
+- Its HTTP interface listens on host port `8083`; private Caddy routing proxies `adguard.example.com` to `host.docker.internal:8083`.
+- AdGuard Home does not join `edge`; Caddy's Compose definition maps `host.docker.internal` using `host-gateway`.
+- DNS over UDP and TCP, filtering, cache behavior, the private HTTPS route, and distinct Tailscale `100.x` client attribution were verified on 2026-08-24. A full VM1 reboot/persistence test remains pending a maintenance window.
+- Pi-hole remains installed at `/home/services-vm/services/pihole`, with `./etc-pihole` and a Teleporter export preserved. Its container is stopped with restart policy `no`.
+- A Technitium trial remains at `/home/services-vm/services/technitium`; its container is stopped with restart policy `no`. It is not an active resolver.
 - VM1 uses `tailscale set --accept-dns=false` to avoid resolving through itself.
 - VM1 advertises an exit node; clients opt in individually. DNS filtering does not imply full-traffic routing.
 - Tailscale global nameservers are VM1's stable Tailscale IPv4 plus `1.1.1.1`, with Override DNS enabled and MagicDNS retained.
@@ -246,4 +252,5 @@ VM2/SFTPGo state:
 5. Enable SFTPGo admin/user 2FA and review brute-force/rate-limit settings before broader account distribution.
 6. Configure VM3 static LAN/storage networking, persistent SMB mount, guest agent, and its separate Tailscale organization.
 7. Periodically run repository checks while the external HDD is attached; plans remain manual because the disk is normally off.
-8. Periodically test Pi-hole failure behavior and confirm clients can resolve through the configured public secondary resolver.
+8. Reboot-test AdGuard Home persistence during a maintenance window, then periodically test failure behavior and public-secondary resolution.
+9. Add `/home/services-vm/services/adguardhome/{conf,work}` to the next appropriate Backrest plan and test a representative configuration restore.

@@ -6,7 +6,7 @@ Extend the existing public-tunnel Caddy deployment so the same container also se
 
 ```text
 Public:  cloudflared -> caddy:80  -> public application
-Private: Tailscale   -> caddy:443 -> private application
+Private: Tailscale Serve TCP :443 -> 127.0.0.1:8443 -> caddy:443 -> private application
 ```
 
 The stock `caddy:2-alpine` image does not bundle third-party DNS provider modules. The supported approach is to compile Caddy with `github.com/caddy-dns/cloudflare` using the official Caddy builder, then copy the binary into the official Alpine runtime image.
@@ -45,7 +45,6 @@ Do not use the Global API Key. Avoid client-IP restrictions unless the residenti
 ```dotenv
 TUNNEL_TOKEN=<SECRET>
 CF_API_TOKEN=<SECRET>
-TAILSCALE_IP=<SERVICES_VM_TAILSCALE_IP>
 ```
 
 ```bash
@@ -94,7 +93,7 @@ services:
       CF_API_TOKEN: ${CF_API_TOKEN}
 
     ports:
-      - "${TAILSCALE_IP}:443:443/tcp"
+      - "127.0.0.1:8443:443/tcp"
 
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -126,16 +125,29 @@ volumes:
   caddy_config:
 ```
 
-Port `80` is not published to the host; `cloudflared` reaches it privately. Port `443` is published only on the Tailscale interface, not on VM1's LAN address.
+Port `80` is not published to the host; `cloudflared` reaches it privately. Caddy's TLS port is published only on host loopback `127.0.0.1:8443`, so neither LAN nor internet clients can reach that listener directly. Tailscale Serve owns tailnet TCP port `443` and forwards raw TCP to Caddy. Caddy still terminates TLS and presents the wildcard certificate.
 
-Binding to a specific `100.x` address can fail during boot if Docker starts before Tailscale assigns that address. If Caddy is unexpectedly stopped after reboot:
+Configure the persistent raw TCP forwarder on `services-vm`:
 
 ```bash
-systemctl is-active tailscaled
-tailscale ip -4
-cd /home/services-vm/services/proxy
-sudo docker compose up -d caddy
+sudo tailscale serve --yes --bg \
+  --tcp=443 \
+  tcp://127.0.0.1:8443
+sudo tailscale serve status
 ```
+
+Use `serve`, never `funnel`: Serve is tailnet-only. The background configuration is retained by Tailscale and resumes when Tailscale returns after a reboot. This design does not need a separate proxy startup script or per-stack systemd unit.
+
+### 2026-08 power-outage reliability correction
+
+During an uncontrolled power loss, Caddy received external `SIGTERM`, performed a graceful shutdown, and exited with status `0`; backend connection-refused and Docker-DNS errors in the same log were consequences of Frigate being unavailable during shutdown/startup, not a Caddy crash. The host restarted before public internet connectivity returned.
+
+The previous Compose mapping bound Docker directly to VM1's Tailscale `100.x` address. That introduced a boot race: Docker could try to create Caddy before the Tailscale address existed, and Docker restart policies cannot recover a container that was never created successfully. The live mapping was therefore changed on 2026-08-25 to loopback `127.0.0.1:8443`, with Tailscale Serve providing persistent tailnet TCP `443` forwarding. Private HTTPS was verified working after the cutover. Full VM reboot persistence remains unverified until an approved maintenance window.
+
+Raw TCP forwarding has two operational consequences:
+
+- Caddy continues to terminate TLS, so the existing custom-domain wildcard certificate and SNI routing remain unchanged.
+- Caddy may see the forwarded peer as loopback rather than the original Tailscale client. Do not enable PROXY protocol unless Caddy is explicitly configured to parse it.
 
 ## Combined Caddyfile
 
@@ -252,13 +264,15 @@ Verify the host listener without exposing environment variables:
 sudo docker inspect caddy \
   --format '{{json .HostConfig.PortBindings}}'
 
-sudo ss -lntp | grep ':443'
+sudo ss -lntp | grep ':8443'
+sudo tailscale serve status
 ```
 
-Expected listener:
+Expected local mapping and Serve route:
 
 ```text
-<SERVICES_VM_TAILSCALE_IP>:443
+127.0.0.1:8443 -> caddy:443/tcp
+tailnet TCP :443 -> tcp://127.0.0.1:8443
 ```
 
 ## Adding future private services
@@ -313,8 +327,9 @@ Common log causes:
 | Module not registered | Stock image still running | Rebuild and force-recreate Caddy |
 | Cloudflare authentication failure | Token missing/incorrect | Check `.env` and Compose environment mapping |
 | Permission denied/zone not found | Token scope incomplete | Add `Zone.DNS:Edit`, `Zone.Zone:Read`, correct zone resource |
-| Address already in use | Another process owns Tailscale `:443` | Identify listener with `ss`; remove conflicting binding |
-| Cannot assign requested address | Tailscale IP absent during startup | Start/repair Tailscale, then recreate Caddy |
+| Loopback `8443` already in use | Another host process owns Caddy's local forwarding port | Identify the owner with `ss`; do not expose Caddy on `0.0.0.0` as a shortcut |
+| No Tailscale Serve route on `:443` | Serve configuration is absent or Tailscale is not running | Check `tailscale serve status` and `systemctl status tailscaled`; restore the documented raw TCP route |
+| `cannot assign requested address` in historical Caddy logs | Old Compose mapping bound directly to a Tailscale `100.x` address before it existed | Keep the current loopback mapping plus Tailscale Serve; do not restore the direct `100.x:443` bind |
 
 ### 3. Inspect TLS directly
 
@@ -346,5 +361,7 @@ At the time this chapter was written:
 - Wildcard DNS was added.
 - Portainer was configured to join `edge`.
 - The private wildcard HTTPS incident was resolved and the pattern is now used by private services.
+- Caddy TLS is bound to loopback `127.0.0.1:8443`; persistent Tailscale Serve raw TCP forwarding supplies tailnet port `443`.
+- Private HTTPS was verified after the 2026-08-25 cutover; full reboot recovery remains pending a maintenance-window test.
 - The `ERR_SSL_PROTOCOL_ERROR` checklist remains as the incident playbook for certificate or listener regressions.
 - No Cloudflare API token value or Tailscale `100.x` address is recorded in the wiki.

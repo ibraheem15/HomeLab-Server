@@ -1,6 +1,6 @@
 # Home Lab Infrastructure Wiki
 
-This repository documents the design, migration, recovery, and day-to-day operation of a two-node home lab built around Proxmox, Debian, Docker, iSCSI, Tailscale, Caddy, Cloudflare Tunnel, Frigate, Immich, and Pi-hole.
+This repository documents the design, migration, recovery, and day-to-day operation of a two-node home lab built around Proxmox, Debian, Docker, iSCSI, Tailscale, Caddy, Cloudflare Tunnel, Frigate, Immich, and AdGuard Home.
 
 The documentation is written as an operational wiki rather than a collection of isolated installation notes. It records architecture decisions, failure modes, recovery procedures, and reusable deployment patterns.
 

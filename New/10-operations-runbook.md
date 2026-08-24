@@ -39,6 +39,29 @@ docker ps
 cd /home/services-vm/frigate && docker compose ps
 ```
 
+DNS health on VM1:
+
+```bash
+cd /home/services-vm/services/adguardhome
+sudo docker compose ps
+sudo ss -lntup | grep -E ':(53|8083)\b'
+dig @127.0.0.1 example.com A
+dig +tcp @192.168.1.20 example.com A
+```
+
+Expected: AdGuard Home is running in host mode, owns TCP/UDP 53, answers its UI on 8083, and resolves through both UDP and TCP. Pi-hole and Technitium must remain stopped with restart policy `no`. Do not start either while AdGuard Home owns port 53.
+
+Reverse-proxy health on VM1:
+
+```bash
+cd /home/services-vm/services/proxy
+sudo docker compose ps
+sudo ss -lntp | grep ':8443'
+sudo tailscale serve status
+```
+
+Expected: Caddy and cloudflared are running, Caddy is published only on `127.0.0.1:8443`, and Tailscale Serve forwards tailnet TCP `:443` to `tcp://127.0.0.1:8443`.
+
 ### TrueNAS and VM2
 
 ```bash
@@ -65,10 +88,16 @@ sudo docker compose logs --tail=30 cloudflared
 4. Build A boots.
 5. TrueNAS VM `101` starts and imports pool `sata`.
 6. VM1 `102` boots; open-iscsi logs in automatically and systemd mounts the UUID.
-7. VM2 `103` boots; its CIFS automount connects on first access.
-8. VM3 `104` starts only after its configuration is completed.
+7. Docker starts Caddy independently on `127.0.0.1:8443`; cloudflared reconnects when public internet returns.
+8. Tailscale restores its persistent raw TCP Serve route on tailnet `:443` when Tailscale becomes available.
+9. VM2 `103` boots; its CIFS automount connects on first access.
+10. VM3 `104` starts only after its configuration is completed.
+
+AdGuard Home starts through Docker's `unless-stopped` policy after VM1 networking is available. Its tailnet DNS path has not yet been proven by a full VM1 reboot; perform and record that test only during an approved maintenance window.
 
 After an uncontrolled outage, do not assume the mount is healthy merely because it exists. Run the VM1 health check and scan kernel logs.
+
+The proxy path deliberately has no direct Docker bind to the Tailscale `100.x` address. If private HTTPS does not recover, check `tailscale serve status`; do not add a per-stack startup script or restore the old direct bind as a shortcut. A full reboot test of this corrected path remains a maintenance-window task.
 
 ## Safe shutdown order
 
@@ -129,6 +158,8 @@ Minimum backup scope:
 ```text
 VM1 local:
   /home/services-vm/frigate/config
+  /home/services-vm/services/adguardhome/conf
+  /home/services-vm/services/adguardhome/work
   future Vaultwarden data
   future Immich PostgreSQL dumps/data strategy
   Compose files and secret-management files
@@ -218,4 +249,3 @@ Use descriptive, dated names during real maintenance. Never publish the target J
 - Pulling `frigate:stable` can change the application version. Read Frigate release/migration notes before recreating the container.
 - Keep Tailscale current.
 - Update Lenovo BIOS in a dedicated maintenance window, not while troubleshooting another subsystem.
-

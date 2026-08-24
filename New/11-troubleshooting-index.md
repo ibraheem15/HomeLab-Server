@@ -83,10 +83,12 @@
 | Two tunnels named `camera` and `services-vm` | Service route was mistakenly created as another tunnel | Keep active `services-vm`; move/verify route; delete inactive tunnel |
 | `camera.example.com` follows private wildcard | Exact tunnel DNS record missing | Restore exact proxied CNAME to active tunnel; exact records override wildcard |
 | Private hostname resolves to Cloudflare/tunnel | Obsolete exact record shadows wildcard | Remove exact route/CNAME; wildcard must be DNS-only A to VM1 Tailscale IP |
-| `ERR_SSL_PROTOCOL_ERROR` | TLS listener/certificate failed before backend routing | Verify DNS, Caddy state, Cloudflare module, certificate logs, and `100.x:443` binding |
+| `ERR_SSL_PROTOCOL_ERROR` | TLS listener/certificate failed before backend routing | Verify DNS, Caddy state, Cloudflare module, `127.0.0.1:8443`, and `tailscale serve status` |
 | Caddy says Cloudflare module unregistered | Stock Caddy image still running | Build from Dockerfile and force-recreate Caddy |
 | DNS-01 authentication/permission error | Missing/incorrect token or scope | Pass `CF_API_TOKEN`; require zone DNS Edit + zone Read for the specific zone |
-| `cannot assign requested address` on Caddy startup | Docker started before Tailscale assigned bound `100.x` IP | Start/repair Tailscale; recreate Caddy; consider boot-order hardening |
+| Caddy exited with status `0` after a power loss | The host sent external `SIGTERM`; backend refusal/DNS errors occurred while other containers were stopping or starting | Treat this as graceful host shutdown, then verify Caddy, cloudflared, Tailscale Serve, and each backend separately |
+| `cannot assign requested address` on Caddy startup | Historical Compose mapping bound Docker directly to a Tailscale `100.x` IP before it existed | Use loopback `127.0.0.1:8443` plus persistent Tailscale Serve raw TCP `:443`; do not restore the direct bind |
+| Private hostnames time out while Caddy is running | Tailscale is offline or its persistent Serve route is absent | Check `tailscale serve status`; expected route is tailnet TCP `:443` to `tcp://127.0.0.1:8443` |
 | Trusted HTTPS followed by `502` | TLS works; Caddy cannot reach application | Attach web container to `edge`; verify container name, port, and backend scheme |
 | `edge` declared but Caddy cannot resolve service | Service did not explicitly join `edge` | Add `networks: [default, edge]` under the service and recreate it |
 
@@ -101,17 +103,19 @@
 | Onboarding says `profile` has missing files | Database references an absent account avatar | Restore exact file from backup or continue and upload a new avatar; `.immich` marker is not a substitute |
 | Valkey warns `Memory overcommit must be enabled` | Host kernel default is unsuitable for background save | Persist `vm.overcommit_memory=1` in `/etc/sysctl.d/99-valkey.conf` |
 
-## Pi-hole and Tailscale DNS
+## AdGuard Home and Tailscale DNS
 
 | Symptom | Cause | Resolution |
 |---|---|---|
-| `pihole.example.com` returns HTTP 502 | Caddy cannot reach the Pi-hole backend | With final host-network layout, proxy to `host.docker.internal:8082`; ensure Caddy has `host.docker.internal:host-gateway` |
-| Pi-hole logs show healthy ports 80/443 but direct VM1 IP has no GUI | Bridge-mode Compose published only DNS port 53 | This was expected in the initial design; use Caddy, or final host-network UI at `http://192.168.1.20:8082/admin/` |
-| All queries appear from one `172.x` client | Docker bridge source NAT hides original clients | Move Pi-hole to `network_mode: host`; remove `ports` and `edge`; move web listener to `8082` |
-| Pi-hole cannot bind port 53 | Another host resolver/service owns the port | Inspect `sudo ss -lntup | grep -E '(:53[[:space:]])'`; stop or reconfigure the conflicting service before restarting Pi-hole |
-| Internet works but blocking is inconsistent | Public secondary DNS may be selected while Pi-hole is healthy | Expected availability tradeoff; remove public secondary only if strict filtering is more important than DNS failover |
-| VM1 resolves through itself or DNS loops | Pi-hole host accepts tailnet DNS policy | Run `sudo tailscale set --accept-dns=false` on VM1 |
-| DNS uses Pi-hole without an exit node | Tailnet DNS policy is independent of default-route selection | Expected: only DNS traverses VM1; web/download traffic remains direct |
+| `adguard.example.com` returns HTTP 502 | Caddy cannot reach the host-network UI | Proxy to `host.docker.internal:8083`; retain Caddy's `host.docker.internal:host-gateway` mapping |
+| Host port 8083 does not answer after the wizard | Wizard saved `http.address` as `0.0.0.0:80`, while Docker mapped 8083→8083 | Stop AdGuard Home; set `http.address: 0.0.0.0:8083` in `AdGuardHome.yaml`; validate; start again |
+| AdGuard Home cannot bind port 53 | Pi-hole, Technitium, or another resolver still owns the port | Stop the old resolver, set its restart policy to `no`, and prove port 53 is free before recreating AdGuard Home |
+| All queries appear from one `172.x` client | Docker bridge source NAT hides original clients | Use `network_mode: host`; remove staging `ports`; recreate and verify distinct LAN/Tailscale addresses |
+| A domain resolves even though blocking is enabled | The requested name and CNAME targets are absent from enabled lists, a list failed to update, or a public secondary handled the query | Check filtering/query log and list-update status before treating it as a resolver failure |
+| Initial query takes about 45 ms | Cold cache/upstream round trip | Repeat the same query; warm-cache responses should be much faster before upstream changes are considered |
+| Internet works but blocking is inconsistent | Public secondary DNS may be selected while AdGuard Home is healthy | Expected availability tradeoff; remove public secondary only if strict filtering is more important than DNS failover |
+| VM1 resolves through itself or DNS loops | DNS host accepts the tailnet DNS policy | Run `sudo tailscale set --accept-dns=false` on VM1 |
+| DNS uses AdGuard Home without an exit node | Tailnet DNS policy is independent of default-route selection | Expected: only DNS traverses VM1; web/download traffic remains direct |
 | Selecting exit node does not change public IP | Exit-node advertisement or admin approval missing | Enable IP forwarding, advertise the exit node, approve it in Tailscale admin, then select `services-vm` on the client |
 
 ## Netdata and direct service access
@@ -146,7 +150,8 @@ sudo docker compose exec caddy \
   caddy list-modules | grep dns.providers.cloudflare
 sudo docker inspect caddy \
   --format '{{json .HostConfig.PortBindings}}'
-sudo ss -lntp | grep ':443'
+sudo ss -lntp | grep ':8443'
+sudo tailscale serve status
 sudo docker network inspect edge
 ```
 

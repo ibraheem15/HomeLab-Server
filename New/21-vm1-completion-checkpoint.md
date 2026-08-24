@@ -9,7 +9,7 @@ VM1 local SSD → Debian, Docker, Compose, application configuration, databases
 Build B iSCSI → bulk media, Immich assets, Frigate recordings, Personal data
 USB HDD      → normally-off Restic repository for manual Backrest sessions
 edge network → Caddy-to-frontend routing only
-Tailscale    → administration, private HTTPS names, Pi-hole DNS, optional exit node
+Tailscale    → administration, private HTTPS names, AdGuard Home DNS, optional exit node
 Cloudflare   → explicit public route for camera.domain.com only
 ```
 
@@ -21,7 +21,9 @@ Cloudflare   → explicit public route for camera.domain.com only
 | Immich | Operational/restored | PostgreSQL local; assets on iSCSI | Private wildcard HTTPS through Caddy |
 | Caddy + cloudflared | Operational | Proxy config local | Shared ingress; one active tunnel |
 | Portainer | Integrated | Local Docker volume/data | Private wildcard HTTPS |
-| Pi-hole | Operational | `./etc-pihole` local | Tailnet DNS; private UI; public resolver available |
+| AdGuard Home | Operational; reboot test pending | `./conf` + `./work` local | Host-network tailnet DNS; private UI on 8083/Caddy |
+| Pi-hole | Stopped rollback | `./etc-pihole` local + Teleporter export | Restart policy `no`; not serving ports |
+| Technitium | Stopped trial | `./config` + `./logs` local | Restart policy `no`; not serving ports |
 | Tailscale exit node | Advertised | Host sysctl/config | Client opt-in only |
 | Netdata | Documented deployment | Named Docker volumes | Host port 19999/private Caddy route |
 | Backrest | Existing repo verified | App state local; repository on removable HDD | Manual sessions only |
@@ -44,12 +46,20 @@ ports:
   - "2283:2283"
 ```
 
-This binds all VM1 interfaces. To expose only through Tailscale, bind the stable Tailscale IP explicitly:
+This binds all VM1 interfaces. To expose a raw diagnostic port only through Tailscale without creating a Docker boot dependency on the `100.x` address, publish it on loopback and add a Tailscale Serve raw TCP route:
 
 ```yaml
 ports:
-  - "100.x.y.z:2283:2283"
+  - "127.0.0.1:2283:2283"
 ```
+
+```bash
+sudo tailscale serve --yes --bg \
+  --tcp=2283 \
+  tcp://127.0.0.1:2283
+```
+
+Check existing routes with `sudo tailscale serve status` before adding another. Prefer the normal Caddy hostname route when raw direct-port access is not required.
 
 Use `http://` unless the application itself provides TLS. Caddy's HTTPS certificate does not make the application's raw host port HTTPS.
 

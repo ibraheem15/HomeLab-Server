@@ -1,7 +1,9 @@
 # Home Lab Build Wiki
 
-**Status:** VM1 is complete for now. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are now operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.  
-**Last updated:** 2026-08-21  
+**Status:** VM1 is complete for now. AdGuard Home is the active host-network DNS filter; Pi-hole and Technitium are retained as stopped rollback options. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.
+
+**Last updated:** 2026-08-25
+
 **Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, current VM3 checkpoint, and a deferred iSCSI-to-NFS migration runbook. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
 
 ## Current topology
@@ -17,7 +19,7 @@ Internet/LAN router 192.168.1.254
         |     |     SMB datasets vm2-business + vm3-faisal
         |     |
         |     +-- services-vm 192.168.1.20
-        |           Debian 13, Docker, Frigate, Immich, Pi-hole, Caddy, cloudflared
+        |           Debian 13, Docker, Frigate, Immich, AdGuard Home, Caddy, cloudflared
         |           iSCSI initiator
         |     |
         |     +-- VM2 baadesaba 192.168.1.30 / 10.20.0.20
@@ -32,7 +34,7 @@ Internet/LAN router 192.168.1.254
               Existing 1 TB HDD exported to VM1
 ```
 
-All static addresses are configured in the operating systems. No DHCP reservations or port forwarding are required. Tailscale is installed on Build A, Build B, and VM1. Public Frigate access uses an outbound Cloudflare Tunnel; private custom-domain services resolve to VM1's Tailscale address through a DNS-only wildcard.
+All static addresses are configured in the operating systems. No DHCP reservations or port forwarding are required. Tailscale is installed on Build A, Build B, and VM1. Public Frigate access uses an outbound Cloudflare Tunnel; private custom-domain services resolve to VM1's Tailscale address through a DNS-only wildcard. Persistent Tailscale Serve raw TCP forwarding carries tailnet port `443` to Caddy's loopback-only `127.0.0.1:8443` listener.
 
 ## Wiki map
 
@@ -51,11 +53,11 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 | [10-operations-runbook.md](10-operations-runbook.md) | Reboot order, health checks, backup rules, outage handling, and routine maintenance |
 | [11-troubleshooting-index.md](11-troubleshooting-index.md) | Symptom → cause → corrective action quick reference |
 | [12-cloudflare-tunnel-and-caddy.md](12-cloudflare-tunnel-and-caddy.md) | Namecheap/Cloudflare DNS delegation, tunnel deployment, Caddy routing, Frigate TLS, and duplicate-tunnel cleanup |
-| [13-tailscale-private-domains.md](13-tailscale-private-domains.md) | Wildcard DNS to VM1's Tailscale IP, private/public hostname policy, and why DNS-01 is required |
-| [14-caddy-wildcard-tls-and-edge-network.md](14-caddy-wildcard-tls-and-edge-network.md) | Scoped API token, official-source Caddy build, wildcard certificate, shared Docker network, and SSL troubleshooting |
+| [13-tailscale-private-domains.md](13-tailscale-private-domains.md) | Wildcard DNS to VM1's Tailscale IP, Serve raw TCP forwarding, private/public hostname policy, and why DNS-01 is required |
+| [14-caddy-wildcard-tls-and-edge-network.md](14-caddy-wildcard-tls-and-edge-network.md) | Scoped API token, official-source Caddy build, loopback TLS listener, Tailscale Serve forwarding, shared Docker network, and SSL troubleshooting |
 | [15-immich-migration.md](15-immich-migration.md) | Version-matched restore, local PostgreSQL, preserved iSCSI assets, permission/DNS incidents, and Caddy integration |
 | [16-reusable-docker-edge-network.md](16-reusable-docker-edge-network.md) | Standard frontend/internal network topology and repeatable procedure for adding future services |
-| [17-pihole-tailscale-dns-and-exit-node.md](17-pihole-tailscale-dns-and-exit-node.md) | Tailnet-wide DNS filtering, public fallback resolver, optional exit-node routing, host-network deployment, and incident fixes |
+| [17-adguard-home-tailscale-dns-and-exit-node.md](17-adguard-home-tailscale-dns-and-exit-node.md) | AdGuard Home tailnet DNS, Pi-hole/Technitium rollback, public fallback resolver, optional exit-node routing, and host-network deployment |
 | [18-netdata-monitoring.md](18-netdata-monitoring.md) | Host-network Netdata deployment, persistence, private Caddy routing, and Linux memory interpretation |
 | [19-backrest-split-storage-backup.md](19-backrest-split-storage-backup.md) | Existing Restic repository, split VM1/iSCSI sources, Immich database rule, exclusions, and deduplication |
 | [20-removable-backup-hdd-runbook.md](20-removable-backup-hdd-runbook.md) | Proxmox USB passthrough, UUID mount policy, automated backup sessions, safe removal, and filesystem recovery |
@@ -78,7 +80,7 @@ All static addresses are configured in the operating systems. No DHCP reservatio
 5. **Keep the external restic/Backrest disk powered off except during backup operations.** Snapshots and RAID are not substitutes for that offline copy.
 6. **Never expose administrative services through an unintended exact DNS record.** Private hostnames must resolve through the DNS-only wildcard to VM1's Tailscale IP; public tunnel CNAMEs are explicit exceptions.
 7. **Attach only web frontends to Docker network `edge`.** Databases and caches stay on application-private networks.
-8. **Treat Pi-hole as the documented host-network exception.** Host networking preserves client IPs; its web UI uses host port `8082` and Caddy reaches it through `host.docker.internal`.
+8. **Treat AdGuard Home as a documented host-network exception.** Host networking preserves client IPs; its web UI uses host port `8083` and Caddy reaches it through `host.docker.internal`.
 9. **Mount the removable repository before recreating Backrest.** A container started against the empty mountpoint can mistake it for a new repository.
 10. **Disconnect the backup HDD only after `backup-usb stop` reports `SAFE TO REMOVE`.** An idle UI does not prove Restic has stopped or writes are flushed.
 11. **Do not mount or format the 1 TB SATA SSD on Proxmox.** TrueNAS VM `101` owns the whole physical disk and ZFS pool `sata`.
