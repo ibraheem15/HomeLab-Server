@@ -1,7 +1,7 @@
 # 28 — Future Build B Migration: iSCSI to NFS
 
-**Status:** Deferred. The current iSCSI setup is operational and must remain unchanged until this runbook is deliberately scheduled.  
-**Objective:** Let Build B own and mount its physical ext4 HDD locally, then export the existing files directly to `services-vm` through NFSv4.  
+**Status:** Deferred. The current iSCSI setup is operational and must remain unchanged until this runbook is deliberately scheduled.
+**Objective:** Let Build B own and mount its physical ext4 HDD locally, then export the existing files directly to `services-vm` through NFSv4.
 **Data migration:** None. The existing partition remains ext4; no wipe, reformat, or file copy is required.
 
 ## Why this migration may be useful
@@ -478,4 +478,3 @@ TrueNAS is not part of this data path. Routing Build B through the TrueNAS VM wo
 - [Frigate recording behavior](https://docs.frigate.video/configuration/record/)
 - [Frigate network-storage guidance](https://docs.frigate.video/guides/ha_network_storage/)
 - [Linux NFS client documentation](https://www.kernel.org/doc/html/latest/admin-guide/nfs/nfs-client.html)
-

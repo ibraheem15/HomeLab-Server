@@ -1,103 +1,82 @@
-# Home Lab Build Wiki
+# Home Lab Wiki
 
-**Status:** VM1 is complete for now. AdGuard Home is the active host-network DNS filter; Pi-hole and Technitium are retained as stopped rollback options. TrueNAS VM `101`, pool `sata`, isolated VM2/VM3 datasets, VM2/SFTPGo, persistent SMB storage, Tailscale, Docker, and a dedicated public Cloudflare Tunnel are operational. VM3 has Debian installed but still needs static networking, storage mounting, Tailscale, and owner-specific configuration.
+Operational notes for rebuilding and running the lab. `00-current-state.md` is the source of truth; numbered files record build and recovery procedures. Secrets belong in the password manager, never here.
 
-**Last updated:** 2026-08-25
+## Architecture
 
-**Scope:** Documents Build B, Proxmox, VM1, TrueNAS, VM2/SFTPGo, public/private ingress, DNS filtering, monitoring, split-storage backup, current VM3 checkpoint, and a deferred iSCSI-to-NFS migration runbook. Jellyfin, Vaultwarden migration, VM3 finalization, SFTPGo 2FA, and GPU passthrough remain future work.
-
-## Current topology
-
-```text
-Internet/LAN router 192.168.1.254
-        |
-        +-- pve-a 192.168.1.10
-        |     Proxmox VE 9.2 on 500 GB NVMe
-        |     |
-        |     +-- truenas 192.168.1.25 / 10.20.0.10
-        |     |     1 TB SATA SSD -> ZFS pool sata
-        |     |     SMB datasets vm2-business + vm3-faisal
-        |     |
-        |     +-- services-vm 192.168.1.20
-        |           Debian 13, Docker, Frigate, Immich, AdGuard Home, Caddy, cloudflared
-        |           iSCSI initiator
-        |     |
-        |     +-- VM2 baadesaba 192.168.1.30 / 10.20.0.20
-        |     |     SFTPGo + dedicated cloudflared connector
-        |     |
-        |     +-- VM3 192.168.1.40 / 10.20.0.30 planned
-        |           Debian installed; configuration pending
-        |
-        +-- storage-b 192.168.1.51
-              Debian 13 on 120 GB SSD
-              LIO/targetcli iSCSI target
-              Existing 1 TB HDD exported to VM1
+```mermaid
+flowchart TB
+  classDef external fill:#eaf2ff,stroke:#2563eb,color:#172554
+  classDef network fill:#ecfdf5,stroke:#059669,color:#064e3b
+  classDef compute fill:#fff7ed,stroke:#ea580c,color:#7c2d12
+  classDef storage fill:#f5f3ff,stroke:#7c3aed,color:#4c1d95
+  classDef service fill:#fefce8,stroke:#ca8a04,color:#713f12
+  Internet[Internet]:::external
+  Tailnet[Tailscale clients]:::external
+  Router[LAN router<br/>192.168.1.254]:::network
+  Cloudflare[Cloudflare<br/>public DNS + Tunnel]:::external
+  subgraph LAN["Home LAN · 192.168.1.0/24"]
+    direction TB
+    Router
+    subgraph PVE["pve-a · 192.168.1.10 · Proxmox VE"]
+      direction LR
+      subgraph VM1["services-vm · VM 102 · 192.168.1.20"]
+        direction TB
+        TS[Tailscale + Serve :443]:::service
+        Tunnel[cloudflared]:::service
+        Caddy[Caddy · edge network<br/>loopback TLS :8443]:::service
+        AdGuard[AdGuard Home<br/>host network :53 / :8083]:::service
+        Frigate[Frigate<br/>config + SQLite on local NVMe]:::service
+        Immich[Immich<br/>PostgreSQL on local NVMe]:::service
+      end
+      subgraph NAS["TrueNAS · VM 101"]
+        TrueNAS[LAN 192.168.1.25<br/>storage 10.20.0.10<br/>ZFS pool sata]:::compute
+      end
+      VM2[baadesaba · VM 103<br/>192.168.1.30 / 10.20.0.20<br/>SFTPGo]:::compute
+      VM3[owner-vm · VM 104<br/>192.168.1.40 / 10.20.0.30<br/>pending configuration]:::compute
+    end
+    StorageB[storage-b · 192.168.1.51<br/>Debian LIO iSCSI target]:::compute
+  end
+  NVMe[Proxmox NVMe<br/>VM disks + VM1 app DBs/config]:::storage
+  SATA[1 TB SATA SSD<br/>passed through to TrueNAS]:::storage
+  HDD[1 TB HDD ext4<br/>actual Frigate + Immich data]:::storage
+  Backup[External Restic HDD<br/>normally disconnected]:::storage
+  Internet --> Cloudflare
+  Cloudflare -->|public HTTP| Tunnel
+  Tailnet -->|private service access| TS
+  TS -->|tailnet :443| Caddy
+  Tunnel --> Caddy
+  Caddy --> Frigate
+  Caddy --> Immich
+  Tailnet -->|DNS| AdGuard
+  Router --> PVE
+  Router --> StorageB
+  SATA -->|whole disk passthrough| TrueNAS
+  TrueNAS -->|SMB vm2-business| VM2
+  TrueNAS -->|SMB vm3-extra| VM3
+  StorageB -->|iSCSI; VM1 only| Frigate
+  StorageB -->|iSCSI; VM1 only| Immich
+  NVMe -. local state .-> Frigate
+  NVMe -. local DB .-> Immich
+  Backup -. backup session .-> NVMe
+  Backup -. backup session .-> HDD
+  HDD --- StorageB
 ```
 
-All static addresses are configured in the operating systems. No DHCP reservations or port forwarding are required. Tailscale is installed on Build A, Build B, and VM1. Public Frigate access uses an outbound Cloudflare Tunnel; private custom-domain services resolve to VM1's Tailscale address through a DNS-only wildcard. Persistent Tailscale Serve raw TCP forwarding carries tailnet port `443` to Caddy's loopback-only `127.0.0.1:8443` listener.
+Public HTTP uses Cloudflare Tunnel → Caddy; Tailscale reaches `services-vm` directly for DNS, administration, and private HTTPS through Serve → Caddy. VM1 local NVMe owns Frigate configuration/SQLite and Immich PostgreSQL; the Build B HDD holds their actual media data through VM1’s exclusive iSCSI mount. Native SFTP uses VM2’s LAN/Tailscale address on port 2022.
 
-## Wiki map
+## Read order
 
-| File | Purpose |
-|---|---|
-| [00-current-state.md](00-current-state.md) | Authoritative inventory, addresses, storage layout, decisions, and unfinished work |
-| [01-preparation-and-network.md](01-preparation-and-network.md) | Downloads, physical preparation, IP plan, Debian USB, and network troubleshooting |
-| [02-build-b-storage-server.md](02-build-b-storage-server.md) | Install Debian on the 120 GB SSD while preserving the original HDD |
-| [03-build-b-iscsi-target.md](03-build-b-iscsi-target.md) | Export the existing ext4 partition with targetcli, ACL, CHAP, and persistence |
-| [04-build-a-proxmox.md](04-build-a-proxmox.md) | Proxmox installation, actual disk layout, Tailscale, and storage policy |
-| [05-vm1-services-vm.md](05-vm1-services-vm.md) | VM1 creation, Debian networking, template accident, and guest preparation |
-| [06-vm1-iscsi-initiator.md](06-vm1-iscsi-initiator.md) | CHAP login, persistent mount, dynamic device names, and mount safety |
-| [07-incident-intel-nic-hang.md](07-incident-intel-nic-hang.md) | `e1000e` hardware-unit hang: diagnosis, recovery, and persistent prevention |
-| [08-incident-iscsi-ext4-recovery.md](08-incident-iscsi-ext4-recovery.md) | iSCSI timeout, aborted ext4 journal, SMART interpretation, and offline repair |
-| [09-frigate-migration.md](09-frigate-migration.md) | Local database vs. remote media layout, corrected Compose file, and config migration |
-| [10-operations-runbook.md](10-operations-runbook.md) | Reboot order, health checks, backup rules, outage handling, and routine maintenance |
-| [11-troubleshooting-index.md](11-troubleshooting-index.md) | Symptom → cause → corrective action quick reference |
-| [12-cloudflare-tunnel-and-caddy.md](12-cloudflare-tunnel-and-caddy.md) | Namecheap/Cloudflare DNS delegation, tunnel deployment, Caddy routing, Frigate TLS, and duplicate-tunnel cleanup |
-| [13-tailscale-private-domains.md](13-tailscale-private-domains.md) | Wildcard DNS to VM1's Tailscale IP, Serve raw TCP forwarding, private/public hostname policy, and why DNS-01 is required |
-| [14-caddy-wildcard-tls-and-edge-network.md](14-caddy-wildcard-tls-and-edge-network.md) | Scoped API token, official-source Caddy build, loopback TLS listener, Tailscale Serve forwarding, shared Docker network, and SSL troubleshooting |
-| [15-immich-migration.md](15-immich-migration.md) | Version-matched restore, local PostgreSQL, preserved iSCSI assets, permission/DNS incidents, and Caddy integration |
-| [16-reusable-docker-edge-network.md](16-reusable-docker-edge-network.md) | Standard frontend/internal network topology and repeatable procedure for adding future services |
-| [17-adguard-home-tailscale-dns-and-exit-node.md](17-adguard-home-tailscale-dns-and-exit-node.md) | AdGuard Home tailnet DNS, Pi-hole/Technitium rollback, public fallback resolver, optional exit-node routing, and host-network deployment |
-| [18-netdata-monitoring.md](18-netdata-monitoring.md) | Host-network Netdata deployment, persistence, private Caddy routing, and Linux memory interpretation |
-| [19-backrest-split-storage-backup.md](19-backrest-split-storage-backup.md) | Existing Restic repository, split VM1/iSCSI sources, Immich database rule, exclusions, and deduplication |
-| [20-removable-backup-hdd-runbook.md](20-removable-backup-hdd-runbook.md) | Proxmox USB passthrough, UUID mount policy, automated backup sessions, safe removal, and filesystem recovery |
-| [21-vm1-completion-checkpoint.md](21-vm1-completion-checkpoint.md) | Final VM1 topology, service checkpoint, invariants, direct-port behavior, health checks, and remaining phases |
-| [22-build-a-storage-architecture.md](22-build-a-storage-architecture.md) | Final NVMe/SATA/HDD roles, TrueNAS rationale, private storage bridge, and capacity model |
-| [23-truenas-vm-and-zfs-pool.md](23-truenas-vm-and-zfs-pool.md) | TrueNAS VM creation, raw SSD attachment, installer/display issues, serial fix, networking, and ZFS pool creation |
-| [24-truenas-datasets-acls-and-smb.md](24-truenas-datasets-acls-and-smb.md) | Dataset quotas, SMB identities, ACL isolation, Linux SMB rationale, and share definitions |
-| [25-vm2-network-and-storage.md](25-vm2-network-and-storage.md) | VM2 build, dual-NIC static networking, DHCP/DNS incidents, persistent SMB mount, Tailscale, and Docker baseline |
-| [26-sftpgo-and-cloudflare-tunnel.md](26-sftpgo-and-cloudflare-tunnel.md) | SFTPGo split persistence, UID fix, initial user, dedicated tunnel, published route, and deferred hardening |
-| [27-vm3-installation-checkpoint.md](27-vm3-installation-checkpoint.md) | VM3 resources, installed state, target network/storage configuration, and unfinished work |
-| [28-future-iscsi-to-nfs-migration.md](28-future-iscsi-to-nfs-migration.md) | Deferred, reversible conversion of Build B from an iSCSI block export to a locally mounted ext4 filesystem exported directly to VM1 through NFSv4 |
-| [backup-usb.sh](backup-usb.sh) | Fail-closed helper for detecting, mounting, validating, starting Backrest, stopping, syncing, and unmounting the USB repository |
+1. [00-current-state.md](00-current-state.md) — live inventory and invariants.
+2. [10-operations-runbook.md](10-operations-runbook.md), then [11-troubleshooting-index.md](11-troubleshooting-index.md).
+3. Build docs `01`–`08`, service docs `09`, `12`–`20`, then TrueNAS/VM docs `22`–`27`.
+4. `28-build-b-outage-recovery.md` handles an outage; `28-future-iscsi-to-nfs-migration.md` is deferred.
 
-## Non-negotiable safety rules
+## Non-negotiable rules
 
-1. **Never mount the exported ext4 filesystem on Build B while VM1 has an iSCSI session.** ext4 is not a clustered filesystem; two writers can corrupt it.
-2. **Never run `fsck` against an online LUN.** Shut down VM1, confirm no sessions, clear the live LIO configuration, then repair.
-3. **Never identify the LUN by `/dev/sdb` or `/dev/sdc`.** Those names are dynamic. Use filesystem UUID and HDD PARTUUID.
-4. **Keep databases local to VM1.** Frigate SQLite, Immich PostgreSQL, and Vaultwarden SQLite must not live on iSCSI.
-5. **Keep the external restic/Backrest disk powered off except during backup operations.** Snapshots and RAID are not substitutes for that offline copy.
-6. **Never expose administrative services through an unintended exact DNS record.** Private hostnames must resolve through the DNS-only wildcard to VM1's Tailscale IP; public tunnel CNAMEs are explicit exceptions.
-7. **Attach only web frontends to Docker network `edge`.** Databases and caches stay on application-private networks.
-8. **Treat AdGuard Home as a documented host-network exception.** Host networking preserves client IPs; its web UI uses host port `8083` and Caddy reaches it through `host.docker.internal`.
-9. **Mount the removable repository before recreating Backrest.** A container started against the empty mountpoint can mistake it for a new repository.
-10. **Disconnect the backup HDD only after `backup-usb stop` reports `SAFE TO REMOVE`.** An idle UI does not prove Restic has stopped or writes are flushed.
-11. **Do not mount or format the 1 TB SATA SSD on Proxmox.** TrueNAS VM `101` owns the whole physical disk and ZFS pool `sata`.
-12. **Do not share the root of pool `sata`.** Export only child datasets with isolated ACLs.
-13. **Keep VM2/VM3 application databases on their local NVMe disks.** SMB is for bulk files, not databases.
-14. **Never start file services against an unmounted SMB path.** Confirm `findmnt` before Docker recreation; systemd automount is the normal guard.
-
-## Secrets intentionally omitted
-
-The wiki includes real LAN addresses, target IQN, filesystem UUID, and partition UUID because they are required for reconstruction. It excludes:
-
-- iSCSI CHAP password
-- Camera and ONVIF passwords
-- Tailscale authentication material
-- Cloudflare credentials
-- Cloudflare tunnel UUID where not required for reconstruction
-- VM1 Tailscale `100.x` address
-- Hardware serial numbers and product UUIDs
-
-Replace every value shown as `<SECRET>` or `<PASSWORD>` with the value stored in the password manager.
+- Identify disks by `/dev/disk/by-id`, UUID, or PARTUUID; never by `sdX`.
+- Build B ext4 is mounted through VM1 iSCSI or locally on Build B, never both.
+- TrueNAS exclusively owns the passed-through SATA SSD and exports child datasets, not the pool root.
+- Storage-dependent containers fail closed when their mount is absent.
+- Only web frontends join Docker network `edge`; databases and caches stay private.
+- Explicit Cloudflare routes are public; wildcard private DNS points to VM1’s Tailscale address.

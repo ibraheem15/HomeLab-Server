@@ -1,251 +1,41 @@
-# 10 — Operations and Recovery Runbook
+# 10 — Operations Runbook
 
-## Normal health check
+## Routine health check
 
-### Build A / Proxmox
+| Host | Command | Expected |
+|---|---|---|
+| `pve-a` | `qm status 101 102 103; systemctl --failed; lvs` | required VMs running; no failures |
+| `storage-b` | `sudo targetcli sessions; sudo targetcli ls; findmnt /dev/sdb2; sudo smartctl -H /dev/sdb` | VM1 session present; HDD not locally mounted |
+| VM1 | `findmnt /mnt/storage-b; sudo iscsiadm -m session -P 1; docker ps` | one writable mount/session; expected containers |
+| VM2 | `findmnt /mnt/vm2-business; cd ~/services/sftpgo && sudo docker compose ps` | SMB mount and SFTPGo present |
+| proxy | `sudo ss -lntp | grep :8443; sudo tailscale serve status` | Caddy on loopback; Serve forwards `:443` |
 
-```bash
-ip -4 -br address
-ip route
-ping -c 3 192.168.1.254
-qm status 102
-lvs
-systemctl --failed
-dmesg -T | grep -Ei 'e1000e|Hardware Unit Hang|NETDEV WATCHDOG' | tail -20
-```
-
-### Build B / target
+After any storage/network fault, inspect VM1 kernel logs before a write:
 
 ```bash
-hostnamectl
-ip -4 -br address
-findmnt /dev/sdb2
-sudo targetcli sessions
-sudo targetcli ls
-sudo smartctl -H /dev/sdb
+sudo journalctl -k -b --no-pager | grep -Ei 'iscsi|I/O error|EXT4-fs|aborted journal' | tail -100
 ```
 
-`findmnt /dev/sdb2` must be empty while VM1 uses the LUN.
+Follow [08-incident-iscsi-ext4-recovery.md](08-incident-iscsi-ext4-recovery.md) for I/O errors or an aborted journal.
 
-### VM1
+## Startup and shutdown
 
-```bash
-ip -4 -br address
-ip route
-sudo iscsiadm -m session -P 1
-findmnt /mnt/storage-b
-sudo test -w /mnt/storage-b && echo 'storage writable'
-docker ps
-cd /home/services-vm/frigate && docker compose ps
-```
+Start: router/switch → `storage-b` and LIO → `pve-a` → TrueNAS → VM1/iSCSI mount → Docker → VM2. Verify the mount before starting any media-dependent container. VM3 remains optional until configured.
 
-DNS health on VM1:
+For planned shutdown: stop VM1 applications, leave the mount directory, unmount `/mnt/storage-b`, log out of iSCSI, power off VM1, then shut down Build B/Proxmox. Never locally mount or repair the LUN while VM1 is logged in.
 
-```bash
-cd /home/services-vm/services/adguardhome
-sudo docker compose ps
-sudo ss -lntup | grep -E ':(53|8083)\b'
-dig @127.0.0.1 example.com A
-dig +tcp @192.168.1.20 example.com A
-```
+## Backup session
 
-Expected: AdGuard Home is running in host mode, owns TCP/UDP 53, answers its UI on 8083, and resolves through both UDP and TCP. Pi-hole and Technitium must remain stopped with restart policy `no`. Do not start either while AdGuard Home owns port 53.
+1. Attach the external HDD and prove UUID, model, and expected Restic repository.
+2. Quiesce or dump databases as their backup plan requires; back up VM1 configuration/databases and irreplaceable Build B media.
+3. Run backup, then periodic `restic check` and an actual restore test.
+4. Stop Backrest/restic, sync, unmount/eject, and disconnect the disk only after `backup-usb stop` reports `SAFE TO REMOVE`.
 
-Reverse-proxy health on VM1:
+Images/packages are reproducible. Prioritize Compose files, application config, databases, keys, and personal media.
 
-```bash
-cd /home/services-vm/services/proxy
-sudo docker compose ps
-sudo ss -lntp | grep ':8443'
-sudo tailscale serve status
-```
+## Maintenance policy
 
-Expected: Caddy and cloudflared are running, Caddy is published only on `127.0.0.1:8443`, and Tailscale Serve forwards tailnet TCP `:443` to `tcp://127.0.0.1:8443`.
-
-### TrueNAS and VM2
-
-```bash
-# Proxmox
-qm status 101
-qm status 103
-
-# VM2
-ip -4 -br address
-ip route
-ping -c 3 10.20.0.10
-findmnt /mnt/vm2-business
-df -hT /mnt/vm2-business
-cd /home/baadesaba/services/sftpgo
-sudo docker compose ps
-sudo docker compose logs --tail=30 cloudflared
-```
-
-## Safe startup order
-
-1. Router/switch available.
-2. Build B boots; target restore service loads LIO configuration.
-3. Confirm Build B listens on `192.168.1.51:3260`.
-4. Build A boots.
-5. TrueNAS VM `101` starts and imports pool `sata`.
-6. VM1 `102` boots; open-iscsi logs in automatically and systemd mounts the UUID.
-7. Docker starts Caddy independently on `127.0.0.1:8443`; cloudflared reconnects when public internet returns.
-8. Tailscale restores its persistent raw TCP Serve route on tailnet `:443` when Tailscale becomes available.
-9. VM2 `103` boots; its CIFS automount connects on first access.
-10. VM3 `104` starts only after its configuration is completed.
-
-AdGuard Home starts through Docker's `unless-stopped` policy after VM1 networking is available. Its tailnet DNS path has not yet been proven by a full VM1 reboot; perform and record that test only during an approved maintenance window.
-
-After an uncontrolled outage, do not assume the mount is healthy merely because it exists. Run the VM1 health check and scan kernel logs.
-
-The proxy path deliberately has no direct Docker bind to the Tailscale `100.x` address. If private HTTPS does not recover, check `tailscale serve status`; do not add a per-stack startup script or restore the old direct bind as a shortcut. A full reboot test of this corrected path remains a maintenance-window task.
-
-## Safe shutdown order
-
-Stop applications first:
-
-```bash
-cd /home/services-vm/frigate
-docker compose down
-```
-
-Then VM1:
-
-```bash
-cd ~
-sudo umount /mnt/storage-b
-sudo iscsiadm -m node \
-  -T <TARGET_IQN> \
-  -p <STORAGE_SERVER_LAN_IP>:3260 --logout
-sudo poweroff
-```
-
-Only after VM1 is off/no session may Build B be shut down or its HDD be checked locally.
-
-For a normal Proxmox shutdown, use the UI or:
-
-```bash
-qm shutdown 102 --timeout 90
-shutdown -h now
-```
-
-## After any network interruption
-
-Inside VM1:
-
-```bash
-sudo iscsiadm -m session -P 1
-findmnt /mnt/storage-b
-sudo journalctl -k -b --no-pager |
-grep -Ei 'iscsi|I/O error|Buffer I/O|EXT4-fs error|aborted journal' |
-tail -100
-```
-
-If there are no fatal I/O/ext4 messages, test a temporary write. If there is an aborted journal or any `Input/output error`, stop services and follow [08-incident-iscsi-ext4-recovery.md](08-incident-iscsi-ext4-recovery.md).
-
-## Backup cycle
-
-1. Stop or quiesce databases/applications as required for consistency.
-2. Power on the external backup HDD.
-3. Confirm the expected repository and destination device by UUID/model.
-4. Run Backrest/restic backup.
-5. Run `restic check` according to repository size and maintenance policy.
-6. Periodically perform test restores, not only repository scans.
-7. Confirm schedule remains enabled.
-8. Unmount/eject and power off the external HDD.
-
-Minimum backup scope:
-
-```text
-VM1 local:
-  /home/services-vm/frigate/config
-  /home/services-vm/services/adguardhome/conf
-  /home/services-vm/services/adguardhome/work
-  future Vaultwarden data
-  future Immich PostgreSQL dumps/data strategy
-  Compose files and secret-management files
-
-Build B media:
-  irreplaceable photographs and application media
-  Frigate footage only according to desired retention/importance
-```
-
-Container images and Debian packages are reproducible and lower priority than configuration, databases, and personal data.
-
-## SMART maintenance
-
-Monthly quick health:
-
-```bash
-sudo smartctl -H /dev/sdb
-sudo smartctl -A /dev/sdb
-```
-
-Schedule SMART self-tests only when no heavy recording workload is expected:
-
-```bash
-sudo smartctl -t short /dev/sdb
-sudo smartctl -l selftest /dev/sdb
-```
-
-Escalate immediately if any of these rise above zero:
-
-- `Reallocated_Sector_Ct`
-- `Current_Pending_Sector`
-- `Offline_Uncorrectable`
-- `UDMA_CRC_Error_Count` (often cable/path rather than platter)
-
-The existing HDD has high start/stop and load-cycle counts. Avoid unnecessary power cycling of Build B itself; only the separate backup HDD is intentionally normally off.
-
-## Capacity monitoring
-
-### Proxmox
-
-```bash
-pvesm status
-lvs
-vgs
-df -hT /
-```
-
-### TrueNAS/VM2
-
-Check the TrueNAS dashboard for pool `sata` status, dataset usage, alerts, and SMART state. Inside VM2:
-
-```bash
-df -hT /mnt/vm2-business
-sudo docker system df
-du -sh /home/baadesaba/services/sftpgo/state
-```
-
-Do not fill ZFS beyond roughly 80–90%. Quotas can exceed physical capacity because they are limits, not reservations; monitor actual pool use.
-
-### VM1 and iSCSI media
-
-```bash
-df -hT /
-df -hT /mnt/storage-b
-docker system df
-```
-
-Do not allow the VM1 root disk or Proxmox thin pool to approach exhaustion. Frigate’s media cleanup protects its recording tree but does not manage unrelated files in the old HDD root.
-
-## Configuration backups before editing
-
-```bash
-sudo cp -a /etc/network/interfaces /etc/network/interfaces.before-change
-sudo cp -a /etc/fstab /etc/fstab.before-change
-sudo targetcli saveconfig
-sudo cp -a /etc/rtslib-fb-target/saveconfig.json /root/saveconfig.before-change.json
-```
-
-Use descriptive, dated names during real maintenance. Never publish the target JSON because it contains CHAP credentials.
-
-## Upgrade policy
-
-- Apply Debian/Proxmox security updates regularly.
-- Read Proxmox release notes before kernel upgrades.
-- Update Docker Engine and Compose from the configured official apt repository.
-- Pin or review major application upgrades; back up databases/config first.
-- Pulling `frigate:stable` can change the application version. Read Frigate release/migration notes before recreating the container.
-- Keep Tailscale current.
-- Update Lenovo BIOS in a dedicated maintenance window, not while troubleshooting another subsystem.
+- Before network, fstab, target, or Compose edits, copy the exact file with a dated `.before-*` suffix.
+- Monthly: SMART health/attributes on Build B; inspect TrueNAS pool alerts and free space; check Proxmox thin-pool use.
+- Upgrade OS, Proxmox, Tailscale, and Docker routinely. Read release/migration notes and back up before major app or kernel upgrades.
+- Perform disruptive reboot/failure tests only in a maintenance window and record the result in `00`.
